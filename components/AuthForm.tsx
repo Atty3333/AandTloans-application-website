@@ -51,11 +51,15 @@ export default function AuthForm() {
       if (mode === 'signin') {
         const { error: err } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
         if (err) {
-          setError(
-            err.message.toLowerCase().includes('email not confirmed')
-              ? 'Please confirm your email first. Check your inbox for the confirmation link.'
-              : 'Incorrect email or password.',
-          );
+          const msg = err.message.toLowerCase();
+          if (msg.includes('email not confirmed')) {
+            setError('Please confirm your email first. Check your inbox for the confirmation link.');
+          } else if (err.code === 'invalid_credentials' || msg.includes('invalid login credentials')) {
+            setError('Incorrect email or password.');
+          } else {
+            // Surface the real cause (bad API key, rate limit, paused project...) instead of hiding it.
+            setError(`Sign-in failed: ${err.message}`);
+          }
         }
         // On success the page's session listener redirects.
       } else if (mode === 'signup') {
