@@ -31,6 +31,19 @@ export async function POST(req: NextRequest) {
     return fail(429, 'Too many submissions. Please try again later.', {}, { 'Retry-After': String(limit.retryAfterSec) });
   }
 
+  // --- Require a signed-in applicant ------------------------------------------------
+  const token = req.headers.get('authorization')?.match(/^Bearer\s+(.+)$/i)?.[1];
+  if (!token) return fail(401, 'Please sign in to submit an application.');
+  let userId: string;
+  try {
+    const { data: auth, error: authError } = await getServiceClient().auth.getUser(token);
+    if (authError || !auth.user) return fail(401, 'Your session has expired. Please sign in again.');
+    userId = auth.user.id;
+  } catch (err) {
+    console.error('[submit-loan] could not verify applicant session', err);
+    return fail(503, 'Applications are temporarily unavailable. Please try again later.');
+  }
+
   // --- Parse + validate ------------------------------------------------------------
   let raw: unknown;
   try {
@@ -90,6 +103,7 @@ export async function POST(req: NextRequest) {
     // --- Insert record; roll back the upload if it fails ----------------------------
     const { error: dbError } = await supabase.from('loan_applications').insert({
       id: applicationId,
+      user_id: userId,
       full_name: data.fullName,
       date_of_birth: data.dob,
       id_number: data.idNumber,
