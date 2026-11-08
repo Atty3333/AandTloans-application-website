@@ -2,6 +2,11 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 
 let client: SupabaseClient | null = null;
 
+/** True when the public Supabase URL and anon key were provided at build time. */
+export function isBrowserClientConfigured(): boolean {
+  return Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
+}
+
 /** Anon client for the admin dashboard. All access is limited by RLS to users with the admin role. */
 export function getBrowserClient(): SupabaseClient {
   if (client) return client;

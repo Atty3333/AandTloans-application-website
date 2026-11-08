@@ -3,7 +3,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import type { Session } from '@supabase/supabase-js';
 import { FileText, LogOut, RefreshCw } from 'lucide-react';
-import { getBrowserClient } from '@/lib/supabase-browser';
+import { getBrowserClient, isBrowserClientConfigured } from '@/lib/supabase-browser';
 import { ALL_STATUSES, STORAGE_BUCKET, formatBwp, type LoanStatus } from '@/lib/config';
 
 interface LoanRow {
@@ -43,6 +43,19 @@ const fmtDate = (iso: string) =>
   new Intl.DateTimeFormat('en-GB', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Africa/Gaborone' }).format(new Date(iso));
 
 export default function AdminPage() {
+  if (!isBrowserClientConfigured()) {
+    return (
+      <main className="min-h-screen grid place-items-center bg-gray-50 p-4">
+        <p role="alert" className="max-w-sm rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+          The admin dashboard is not configured yet. Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY, then redeploy.
+        </p>
+      </main>
+    );
+  }
+  return <AdminDashboard />;
+}
+
+function AdminDashboard() {
   const supabase = useMemo(() => getBrowserClient(), []);
   const [session, setSession] = useState<Session | null>(null);
   const [ready, setReady] = useState(false);
