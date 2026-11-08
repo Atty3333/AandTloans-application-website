@@ -14,6 +14,12 @@ Next.js 14 loan application site: public form → server-built signed PDF → pr
    WHERE email = 'you@example.com';
    ```
    The admin signs in at `/admin` (sign out and in again after the role is granted).
+   Applicants create their own account and sign in on the home page before the application form is shown. If you already ran an older `schema.sql`, add the account link with:
+   ```sql
+   ALTER TABLE public.loan_applications ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES auth.users (id) ON DELETE SET NULL;
+   CREATE INDEX IF NOT EXISTS loan_applications_user_id_idx ON public.loan_applications (user_id);
+   CREATE POLICY "Applicants can read their own applications" ON public.loan_applications FOR SELECT TO authenticated USING (user_id = auth.uid());
+   ```
 5. Optional: put `logo.png` or `logo.jpg` in `public/`. It is used in PDF headers; without it the lender name is printed as text.
 6. `npm run dev`
 

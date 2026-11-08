@@ -1,5 +1,5 @@
 import { ShieldCheck } from 'lucide-react';
-import ApplicationForm from '@/components/ApplicationForm';
+import ApplicantGate from '@/components/ApplicantGate';
 import { LENDER_NAME } from '@/lib/config';
 
 export default function LoanApplicationPage() {
@@ -13,7 +13,7 @@ export default function LoanApplicationPage() {
           </div>
           <ShieldCheck className="w-10 h-10 text-brand-600" aria-hidden="true" />
         </header>
-        <ApplicationForm />
+        <ApplicantGate />
       </div>
     </main>
   );
