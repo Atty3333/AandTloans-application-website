@@ -31,6 +31,10 @@ export async function POST(req: NextRequest) {
     return fail(429, 'Too many submissions. Please try again later.', {}, { 'Retry-After': String(limit.retryAfterSec) });
   }
 
+  // --- Must be signed in (token is verified against Supabase Auth below) -----------
+  const token = req.headers.get('authorization')?.replace(/^Bearer\s+/i, '').trim();
+  if (!token) return fail(401, 'Please sign in to submit an application.');
+
   // --- Parse + validate ------------------------------------------------------------
   let raw: unknown;
   try {
@@ -54,16 +58,30 @@ export async function POST(req: NextRequest) {
   try {
     const supabase = getServiceClient();
 
-    // --- One active application per Omang ------------------------------------------
+    // --- Verify the applicant's session ----------------------------------------------
+    const { data: userData, error: authError } = await supabase.auth.getUser(token);
+    const user = userData?.user;
+    if (authError || !user) return fail(401, 'Your session has expired. Please sign in again.');
+    if (!user.email_confirmed_at) return fail(403, 'Please confirm your email address before applying.');
+
+    const userLimit = rateLimit(`submit-user:${user.id}`, RATE_LIMIT, RATE_WINDOW_MS);
+    if (!userLimit.ok) {
+      return fail(429, 'Too many submissions. Please try again later.', {}, { 'Retry-After': String(userLimit.retryAfterSec) });
+    }
+
+    // --- One active application per Omang and per account ---------------------------
+    // idNumber is validated to 9 digits and user.id is a UUID, so this filter string is safe.
     const { data: existing, error: lookupError } = await supabase
       .from('loan_applications')
-      .select('id')
-      .eq('id_number', data.idNumber)
+      .select('id, user_id')
+      .or(`id_number.eq.${data.idNumber},user_id.eq.${user.id}`)
       .in('status', [...ACTIVE_STATUSES])
       .limit(1);
     if (lookupError) throw lookupError;
     if (existing && existing.length > 0) {
-      return fail(409, 'An application for this Omang number is already in progress.', { fieldErrors: { idNumber: 'An application for this Omang is already in progress' } });
+      return fail(409, 'You already have an application in progress, or this Omang number is already in use.', {
+        fieldErrors: { idNumber: 'An application for this Omang is already in progress' },
+      });
     }
 
     // --- Build the PDF on the server from validated data ----------------------------
@@ -90,6 +108,7 @@ export async function POST(req: NextRequest) {
     // --- Insert record; roll back the upload if it fails ----------------------------
     const { error: dbError } = await supabase.from('loan_applications').insert({
       id: applicationId,
+      user_id: user.id,
       full_name: data.fullName,
       date_of_birth: data.dob,
       id_number: data.idNumber,

@@ -33,8 +33,15 @@ type Errors = Record<string, string>;
 
 const TURNSTILE_SITE_KEY = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY ?? '';
 
-export default function ApplicationForm() {
-  const [values, setValues] = useState<Values>(INITIAL);
+interface ApplicationFormProps {
+  /** Supabase access token of the signed-in applicant; sent as a Bearer token. */
+  accessToken: string;
+  defaultEmail: string;
+  onSubmitted?: () => void;
+}
+
+export default function ApplicationForm({ accessToken, defaultEmail, onSubmitted }: ApplicationFormProps) {
+  const [values, setValues] = useState<Values>({ ...INITIAL, email: defaultEmail });
   const [errors, setErrors] = useState<Errors>({});
   const [consent, setConsent] = useState(false);
   const [signature, setSignature] = useState<string | null>(null);
@@ -91,7 +98,7 @@ export default function ApplicationForm() {
     try {
       const res = await fetch('/api/submit-loan', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
         body: JSON.stringify(payload),
       });
       const data = (await res.json().catch(() => ({}))) as {
@@ -104,6 +111,11 @@ export default function ApplicationForm() {
       if (res.ok && data.success && data.reference) {
         setReference(data.reference);
         window.scrollTo({ top: 0 });
+        onSubmitted?.();
+        return;
+      }
+      if (res.status === 401) {
+        setFormError('Your session has expired. Please sign out and sign in again, then resubmit.');
         return;
       }
       if (data.fieldErrors) showErrors(data.fieldErrors, data.error);
