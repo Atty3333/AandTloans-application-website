@@ -102,7 +102,7 @@ export default function SignatureCanvas({ onSignatureChange, error }: SignatureC
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between">
-        <span id="signature-label" className="block text-sm font-semibold text-gray-700">
+        <span id="signature-label" className="label-caps">
           Applicant digital signature <span className="text-red-500">*</span>
         </span>
         <button
@@ -120,15 +120,15 @@ export default function SignatureCanvas({ onSignatureChange, error }: SignatureC
         id="field-signatureDataUrl"
         tabIndex={-1}
         aria-labelledby="signature-label"
-        className={`border-2 border-dashed rounded-lg bg-white overflow-hidden shadow-inner ${
-          error ? 'border-red-500' : 'border-gray-300'
+        className={`overflow-hidden rounded-lg border-2 border-dashed bg-white ${
+          error ? 'border-red-500' : 'border-brand-200'
         }`}
       >
         <ReactSignatureCanvas
           ref={sig}
           canvasProps={{ className: 'cursor-crosshair touch-none block', style: { height: HEIGHT } }}
           onEnd={emit}
-          penColor="#1e164d"
+          penColor="#2e1065"
         />
       </div>
       {error ? (

@@ -6,7 +6,7 @@ Next.js 14 loan application site: public form → server-built signed PDF → pr
 
 1. `npm install`
 2. Copy `.env.example` to `.env.local` and fill it in.
-3. In the Supabase SQL editor run `schema.sql` (creates the table, RLS, the **private** `signed-documents` bucket and storage policy). If you already ran an earlier version, run `migration_002_accounts.sql` instead (adds applicant accounts).
+3. In the Supabase SQL editor run `schema.sql` (creates the table, RLS, the **private** `signed-documents` bucket and storage policy). If you already ran an earlier version, run `migration_003_documents_dashboard_edits.sql` instead (safe to re-run; adds accounts, supporting documents, guarantor, admin edit history and the one-pending-application rule).
    - In Supabase **Authentication → URL Configuration**, set *Site URL* to your site (e.g. `http://localhost:3000` while testing) and add `/reset-password` and `/` on that domain to *Redirect URLs*.
    - Applicants must confirm their email. For quick local testing you can turn off *Authentication → Providers → Email → Confirm email*. Supabase's built-in email sender is rate-limited; use custom SMTP (e.g. Resend, Brevo) before launch.
 4. Create an admin user in Supabase Auth, then grant the role:
@@ -40,5 +40,17 @@ Security model: the public never touches the database or bucket. The API route u
 - Enable **Cloudflare Turnstile** (set both keys). Without them CAPTCHA is skipped.
 - The rate limiter is in-memory and per instance. For strict limits on serverless, use Upstash Redis or Vercel KV (`lib/rate-limit.ts`).
 - **WhatsApp:** free-form document messages only deliver if the admin messaged your business number in the last 24 h. Create an approved template with a document header and 3 body variables and set `WHATSAPP_TEMPLATE_NAME`. A WhatsApp failure never fails the applicant's submission; check `whatsapp_notified_at` in the dashboard.
-- Set `NEXT_PUBLIC_LOAN_MIN` / `NEXT_PUBLIC_LOAN_MAX` to your real limits (defaults P500–P20,000).
+- Set `NEXT_PUBLIC_LOAN_MIN` / `NEXT_PUBLIC_LOAN_MAX` to your real limits (defaults P100–P200).
 - Consider a retention policy for applications and PDFs, as required under data-protection law.
+
+
+## Pages
+
+| Route | Who | What |
+|---|---|---|
+| `/` | everyone | Sign in / create account |
+| `/dashboard` | applicant | Current and past applications; **Apply for another loan** unlocks once the lender has replied (status is no longer PENDING) |
+| `/apply` | applicant | Application form, 5 supporting documents (bank statement, Omang front/back, registration letter, student ID), consent and signature |
+| `/admin` | admin | Review, **edit all applicant details** (not the signature/PDF), view the signed PDF and every uploaded document, change status, see edit history |
+
+Supporting documents go straight from the browser to the private `application-documents` bucket through a short-lived signed upload URL (`/api/upload-url`); admins read them through signed links. Admin edits go through `/api/admin/applications/[id]` and are written to `application_edits`.

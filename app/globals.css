@@ -2,7 +2,37 @@
 @tailwind components;
 @tailwind utilities;
 
-body {
-  background-color: #f8fafc;
-  color: #0f172a;
+@layer base {
+  body {
+    @apply bg-[#faf8ff] text-slate-900 antialiased;
+    font-family: Arial, Helvetica, sans-serif;
+  }
+}
+
+/* Visual language of the A&T Student Loans legal documents (application form, next of kin, consent). */
+@layer components {
+  .paper {
+    @apply rounded-lg border border-brand-100 bg-white shadow-sm;
+  }
+  .label-caps {
+    @apply block text-[10px] font-bold uppercase tracking-[0.1em] text-brand-700;
+  }
+  .section-title {
+    @apply mb-4 border-b border-brand-200 pb-1.5 font-heading text-xs font-bold uppercase tracking-[0.12em] text-brand-900;
+  }
+  .input-box {
+    @apply mt-1 w-full rounded-md border border-indigo-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-brand-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-brand-300;
+  }
+  .btn-primary {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg bg-brand-700 px-4 py-2.5 text-sm font-bold text-white transition hover:bg-brand-800 focus:outline-none focus:ring-2 focus:ring-brand-300 disabled:cursor-not-allowed disabled:opacity-60;
+  }
+  .btn-secondary {
+    @apply inline-flex items-center justify-center gap-1.5 rounded-lg border border-brand-200 bg-white px-3 py-1.5 text-sm font-semibold text-brand-800 transition hover:bg-brand-50 focus:outline-none focus:ring-2 focus:ring-brand-300 disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .notice {
+    @apply border-l-4 border-brand-500 bg-brand-50 px-4 py-3 text-xs leading-relaxed text-slate-800;
+  }
+  .official-panel {
+    @apply rounded-xl border border-purple-300 bg-[#faf5ff] p-4;
+  }
 }

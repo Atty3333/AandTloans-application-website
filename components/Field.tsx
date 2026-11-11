@@ -40,7 +40,7 @@ export default function Field({
 
   return (
     <div className={wide ? 'sm:col-span-2' : undefined}>
-      <label htmlFor={id} className="block text-xs font-semibold text-gray-700">
+      <label htmlFor={id} className="label-caps">
         {label} {required && <span aria-hidden="true" className="text-red-500">*</span>}
       </label>
       <input
@@ -59,9 +59,7 @@ export default function Field({
         step={type === 'number' ? '0.01' : undefined}
         aria-invalid={error ? true : undefined}
         aria-describedby={describedBy}
-        className={`w-full mt-1 p-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-brand-600 ${
-          error ? 'border-red-500 bg-red-50' : 'border-gray-300'
-        }`}
+        className={`input-box ${error ? '!border-red-500 !bg-red-50' : ''}`}
       />
       {error ? (
         <p id={`${id}-error`} role="alert" className="mt-1 text-xs text-red-600">

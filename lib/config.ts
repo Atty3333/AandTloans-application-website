@@ -3,17 +3,20 @@ const positiveNumber = (raw: string | undefined, fallback: number): number => {
   return raw && Number.isFinite(n) && n > 0 ? n : fallback;
 };
 
-export const LENDER_NAME = 'AAndTee Student Loans';
-export const TERMS_VERSION = '2026-11-v1';
+export const LENDER_NAME = 'A&T Student Loans';
+export const TERMS_VERSION = '2026-11-v2';
 export const TIME_ZONE = 'Africa/Gaborone';
 export const STORAGE_BUCKET = 'signed-documents';
+export const DOCUMENTS_BUCKET = 'application-documents';
 
 // NEXT_PUBLIC_* must be referenced literally so Next can inline them in the client bundle.
-export const LOAN_MIN = positiveNumber(process.env.NEXT_PUBLIC_LOAN_MIN, 500);
-export const LOAN_MAX = positiveNumber(process.env.NEXT_PUBLIC_LOAN_MAX, 20000);
+export const LOAN_MIN = positiveNumber(process.env.NEXT_PUBLIC_LOAN_MIN, 100);
+export const LOAN_MAX = positiveNumber(process.env.NEXT_PUBLIC_LOAN_MAX, 200);
 export const CONTACT_EMAIL = process.env.NEXT_PUBLIC_CONTACT_EMAIL ?? '';
 
-export const ACTIVE_STATUSES = ['PENDING', 'APPROVED', 'DISBURSED'] as const;
+/** While an application is in one of these statuses the applicant has not been replied to and cannot apply again. */
+export const AWAITING_REPLY_STATUSES = ['PENDING'] as const;
+export const isAwaitingReply = (status: string): boolean => (AWAITING_REPLY_STATUSES as readonly string[]).includes(status);
 export const ALL_STATUSES = ['PENDING', 'APPROVED', 'REJECTED', 'DISBURSED', 'REPAID'] as const;
 export type LoanStatus = (typeof ALL_STATUSES)[number];
 

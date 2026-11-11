@@ -43,7 +43,7 @@ describe('applicationSchema', () => {
       expect(r.data.fullName).toBe('Thato Moeng');
       expect(r.data.phone).toBe('+26771234567');
       expect(r.data.email).toBe('thato@example.com');
-      expect(r.data.loanAmount).toBe(2000);
+      expect(r.data.loanAmount).toBe(150);
       expect(r.data.kinAltPhone).toBeUndefined();
     }
   });

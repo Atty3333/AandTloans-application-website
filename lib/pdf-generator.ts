@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { PDFDocument, PDFFont, PDFImage, PDFPage, StandardFonts, rgb } from 'pdf-lib';
 import { LENDER_NAME, TERMS_VERSION, TIME_ZONE, formatBwp } from './config';
-import { TERMS_CLAUSES } from './terms';
+import { CONSENT_PARAGRAPHS, ESIGN_NOTE, FORM_TITLES, KIN_DECLARATION, KIN_NOTICE } from './terms';
 import type { ApplicationInput } from './validation';
 
 export interface PdfMeta {
@@ -14,12 +14,24 @@ export interface PdfMeta {
 const PAGE_W = 595.28;
 const PAGE_H = 841.89;
 const MARGIN = 50;
+const RIGHT = PAGE_W - MARGIN;
 const CONTENT_W = PAGE_W - MARGIN * 2;
-const LABEL_W = 170;
+const COL_GAP = 15;
+const COL_W = (CONTENT_W - COL_GAP) / 2;
 const BOTTOM = 70;
-const BRAND = rgb(0.23, 0.19, 0.52);
-const INK = rgb(0.1, 0.1, 0.1);
-const MUTED = rgb(0.4, 0.4, 0.4);
+
+// Palette sampled from the A&T Student Loans legal templates.
+const INK = rgb(0.1, 0.1, 0.14);
+const PURPLE_DARK = rgb(46 / 255, 16 / 255, 101 / 255);
+const PURPLE = rgb(76 / 255, 29 / 255, 149 / 255);
+const LAVENDER = rgb(243 / 255, 236 / 255, 254 / 255);
+const PANEL_FILL = rgb(250 / 255, 245 / 255, 255 / 255);
+const PANEL_BORDER = rgb(192 / 255, 132 / 255, 252 / 255);
+const FIELD_FILL = rgb(248 / 255, 250 / 255, 252 / 255);
+const FIELD_BORDER = rgb(199 / 255, 210 / 255, 254 / 255);
+const RULE_LIGHT = rgb(221 / 255, 214 / 255, 254 / 255);
+const SLATE = rgb(100 / 255, 116 / 255, 139 / 255);
+const GREY_LINE = rgb(0.82, 0.82, 0.85);
 
 const PNG_MAGIC = [0x89, 0x50, 0x4e, 0x47];
 
@@ -77,6 +89,18 @@ function wrap(text: string, font: PDFFont, size: number, maxWidth: number): stri
   return lines;
 }
 
+/** YYYY-MM-DD -> DD/MM/YYYY (as on the paper forms). */
+export const formatDobForForm = (iso: string): string => {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : iso;
+};
+
+export const formatShortDate = (d: Date): string => {
+  const parts = new Intl.DateTimeFormat('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: TIME_ZONE }).formatToParts(d);
+  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? '';
+  return `${get('day')}/${get('month')}/${get('year')}`;
+};
+
 export const formatDateTime = (d: Date): string =>
   new Intl.DateTimeFormat('en-GB', { dateStyle: 'long', timeStyle: 'short', timeZone: TIME_ZONE }).format(d);
 
@@ -110,6 +134,17 @@ async function embedSignature(pdf: PDFDocument, dataUrl: string): Promise<PDFIma
   }
 }
 
+/** SVG path for a rounded rectangle whose top-left is the path origin (pdf-lib flips the y axis for SVG paths). */
+const roundedRectPath = (w: number, h: number, r: number): string =>
+  `M ${r} 0 H ${w - r} Q ${w} 0 ${w} ${r} V ${h - r} Q ${w} ${h} ${w - r} ${h} H ${r} Q 0 ${h} 0 ${h - r} V ${r} Q 0 0 ${r} 0 Z`;
+
+interface Cell {
+  label: string;
+  value?: string;
+  /** Leave the box empty (for official-use fields completed by the Lender). */
+  blank?: boolean;
+}
+
 export async function buildLoanPdf(data: ApplicationInput, meta: PdfMeta): Promise<Uint8Array> {
   const pdf = await PDFDocument.create();
   const font = await pdf.embedFont(StandardFonts.Helvetica);
@@ -117,6 +152,7 @@ export async function buildLoanPdf(data: ApplicationInput, meta: PdfMeta): Promi
   const logo = await loadLogo(pdf);
   const signature = await embedSignature(pdf, data.signatureDataUrl);
   const ref = meta.applicationId.slice(0, 8).toUpperCase();
+  const signedOn = formatShortDate(meta.submittedAt);
 
   pdf.setTitle(`Loan application ${ref}`);
   pdf.setAuthor(LENDER_NAME);
@@ -124,140 +160,224 @@ export async function buildLoanPdf(data: ApplicationInput, meta: PdfMeta): Promi
   pdf.setCreationDate(meta.submittedAt);
 
   let page: PDFPage = pdf.addPage([PAGE_W, PAGE_H]);
-  let y = PAGE_H - 120;
-  let currentTitle = '';
+  let y = PAGE_H - 132;
+  const pageFooters: string[] = [];
+  let current: { lines: readonly string[]; footer: string } = FORM_TITLES.application;
 
-  const drawHeader = (title: string) => {
-    currentTitle = title;
-    let textX = MARGIN;
-    if (logo) {
-      const scaled = logo.scaleToFit(100, 40);
-      page.drawImage(logo, { x: MARGIN, y: PAGE_H - 40 - scaled.height, ...scaled });
-      textX = MARGIN + scaled.width + 16;
-    } else {
-      page.drawText(safe(bold, LENDER_NAME), { x: MARGIN, y: PAGE_H - 55, size: 12, font: bold, color: BRAND });
+  // --- low-level helpers ---------------------------------------------------------
+  const spacedWidth = (text: string, f: PDFFont, size: number, spacing: number) =>
+    [...text].reduce((w, ch) => w + f.widthOfTextAtSize(ch, size), 0) + spacing * Math.max(0, [...text].length - 1);
+
+  const drawSpaced = (text: string, x: number, yy: number, size: number, f: PDFFont, color = INK, spacing = 0, align: 'left' | 'right' = 'left') => {
+    const t = safe(f, text);
+    let cx = align === 'right' ? x - spacedWidth(t, f, size, spacing) : x;
+    for (const ch of t) {
+      page.drawText(ch, { x: cx, y: yy, size, font: f, color });
+      cx += f.widthOfTextAtSize(ch, size) + spacing;
     }
-    page.drawText(safe(bold, title), { x: textX === MARGIN ? MARGIN : textX, y: logo ? PAGE_H - 62 : PAGE_H - 78, size: 14, font: bold, color: BRAND });
-    page.drawLine({
-      start: { x: MARGIN, y: PAGE_H - 95 },
-      end: { x: PAGE_W - MARGIN, y: PAGE_H - 95 },
-      thickness: 1,
-      color: rgb(0.85, 0.85, 0.85),
-    });
-    y = PAGE_H - 120;
   };
 
-  const newPage = (title: string) => {
+  const drawHeader = (spec: { lines: readonly string[]; footer: string }) => {
+    current = spec;
+    pageFooters.push(spec.footer);
+    if (logo) {
+      const box = logo.scaleToFit(72, 58);
+      page.drawImage(logo, { x: MARGIN, y: PAGE_H - 42 - box.height, ...box });
+    } else {
+      drawSpaced(LENDER_NAME.toUpperCase(), MARGIN, PAGE_H - 62, 11, bold, PURPLE_DARK, 0.6);
+    }
+    let baseline = PAGE_H - (spec.lines.length === 1 ? 66 : 58);
+    for (const line of spec.lines) {
+      drawSpaced(line, RIGHT, baseline, 17, bold, PURPLE_DARK, 0.8, 'right');
+      baseline -= 20;
+    }
+    drawSpaced(LENDER_NAME.toUpperCase(), RIGHT, baseline + 2, 7.5, bold, PURPLE, 0.7, 'right');
+    page.drawLine({ start: { x: MARGIN, y: PAGE_H - 112 }, end: { x: RIGHT, y: PAGE_H - 112 }, thickness: 1, color: PURPLE });
+    y = PAGE_H - 132;
+  };
+
+  const newPage = (spec: { lines: readonly string[]; footer: string }) => {
     page = pdf.addPage([PAGE_W, PAGE_H]);
-    drawHeader(title);
+    drawHeader(spec);
   };
 
   const ensureSpace = (needed: number) => {
-    if (y - needed < BOTTOM) newPage(`${currentTitle.replace(/ \(cont\.\)$/, '')} (cont.)`);
+    if (y - needed < BOTTOM) newPage(current);
   };
 
   const section = (label: string) => {
-    ensureSpace(34);
-    y -= 6;
-    page.drawText(safe(bold, label.toUpperCase()), { x: MARGIN, y, size: 9, font: bold, color: MUTED });
-    y -= 16;
+    ensureSpace(60);
+    y -= 4;
+    drawSpaced(label.toUpperCase(), MARGIN, y, 8.5, bold, PURPLE_DARK, 0.9);
+    page.drawLine({ start: { x: MARGIN, y: y - 5 }, end: { x: RIGHT, y: y - 5 }, thickness: 0.6, color: RULE_LIGHT });
+    y -= 20;
   };
 
-  const field = (label: string, value: string | undefined) => {
-    const lines = wrap(value && value.trim() ? value : 'N/A', font, 10, CONTENT_W - LABEL_W);
-    ensureSpace(lines.length * 14 + 6);
-    page.drawText(safe(bold, `${label}:`), { x: MARGIN, y, size: 10, font: bold, color: rgb(0.2, 0.2, 0.2) });
-    lines.forEach((line, i) => {
-      page.drawText(line, { x: MARGIN + LABEL_W, y: y - i * 14, size: 10, font, color: INK });
+  /** One row of 1 or 2 labelled boxes. Cells in a row share the same height. */
+  const row = (cells: [Cell] | [Cell, Cell]) => {
+    const width = cells.length === 1 ? CONTENT_W : COL_W;
+    const prepared = cells.map((c) => ({
+      c,
+      lines: c.blank ? [''] : wrap(c.value && c.value.trim() ? c.value : '—', font, 9.5, width - 16),
+    }));
+    const boxH = Math.max(23, ...prepared.map((p) => p.lines.length * 12 + 11));
+    ensureSpace(boxH + 22);
+    prepared.forEach(({ c, lines }, i) => {
+      const x = MARGIN + i * (COL_W + COL_GAP);
+      drawSpaced(c.label.toUpperCase(), x, y, 6.5, bold, PURPLE, 0.55);
+      page.drawSvgPath(roundedRectPath(width, boxH, 3), { x, y: y - 5, color: FIELD_FILL, borderColor: FIELD_BORDER, borderWidth: 0.7 });
+      lines.forEach((line, li) => {
+        if (line) page.drawText(line, { x: x + 8, y: y - 5 - 15 - li * 12, size: 9.5, font, color: line === '—' ? SLATE : INK });
+      });
     });
-    y -= lines.length * 14 + 6;
+    y -= 5 + boxH + 14;
   };
 
-  const paragraph = (text: string, opts: { size?: number; fontRef?: PDFFont; gap?: number } = {}) => {
+  const paragraph = (text: string, opts: { size?: number; gap?: number; color?: ReturnType<typeof rgb>; width?: number; x?: number } = {}) => {
     const size = opts.size ?? 9;
-    const f = opts.fontRef ?? font;
-    const lh = size + 4;
-    for (const line of wrap(text, f, size, CONTENT_W)) {
+    const lh = size + 5;
+    for (const line of wrap(text, font, size, opts.width ?? CONTENT_W)) {
       ensureSpace(lh);
-      if (line) page.drawText(line, { x: MARGIN, y, size, font: f, color: INK });
+      if (line) page.drawText(line, { x: opts.x ?? MARGIN, y, size, font, color: opts.color ?? INK });
       y -= lh;
     }
-    y -= opts.gap ?? 4;
+    y -= opts.gap ?? 6;
   };
 
-  const signatureBlock = () => {
-    ensureSpace(100);
-    page.drawText('Applicant digital signature:', { x: MARGIN, y, size: 10, font: bold });
-    const box = signature.scaleToFit(160, 55);
-    page.drawImage(signature, { x: MARGIN + LABEL_W, y: y - box.height + 10, ...box });
-    y -= Math.max(box.height, 40) + 4;
-    page.drawLine({
-      start: { x: MARGIN + LABEL_W, y: y + 4 },
-      end: { x: MARGIN + LABEL_W + 170, y: y + 4 },
-      thickness: 0.5,
-      color: MUTED,
+  const signatureBlock = (opts: { withDateColumn: boolean }) => {
+    ensureSpace(110);
+    y -= 2;
+    page.drawLine({ start: { x: MARGIN, y }, end: { x: RIGHT, y }, thickness: 0.6, color: GREY_LINE, dashArray: [3, 3] });
+    y -= 16;
+    const sigW = opts.withDateColumn ? 320 : CONTENT_W;
+    drawSpaced('APPLICANT SIGNATURE', MARGIN, y, 6.5, bold, PURPLE, 0.55);
+    if (opts.withDateColumn) drawSpaced('DATE', MARGIN + 335, y, 6.5, bold, PURPLE, 0.55);
+    const lineY = y - 58;
+    const img = signature.scaleToFit(170, 46);
+    page.drawImage(signature, { x: MARGIN + 4, y: lineY + 4, ...img });
+    page.drawLine({ start: { x: MARGIN, y: lineY }, end: { x: MARGIN + sigW, y: lineY }, thickness: 0.9, color: PURPLE_DARK });
+    if (opts.withDateColumn) {
+      page.drawText(signedOn, { x: MARGIN + 345, y: lineY + 6, size: 10, font, color: INK });
+      page.drawLine({ start: { x: MARGIN + 335, y: lineY }, end: { x: RIGHT, y: lineY }, thickness: 0.9, color: PURPLE_DARK });
+    }
+    y = lineY - 22;
+  };
+
+  // --- FORM 1: LOAN APPLICATION FORM --------------------------------------------
+  drawHeader(FORM_TITLES.application);
+  section('Personal details');
+  row([{ label: 'Full name', value: data.fullName }]);
+  row([
+    { label: 'Date of birth', value: formatDobForForm(data.dob) },
+    { label: 'Omang / ID number', value: data.idNumber },
+  ]);
+  row([
+    { label: 'Phone number', value: data.phone },
+    { label: 'Email address', value: data.email },
+  ]);
+  row([{ label: 'Residential address', value: data.address }]);
+  section('Employment & financial details');
+  row([
+    { label: 'Institution / employer', value: data.institution },
+    { label: 'Monthly allowance / income', value: formatBwp(data.income) },
+  ]);
+  row([
+    { label: 'Loan amount requested', value: formatBwp(data.loanAmount) },
+    { label: 'Loan purpose', value: data.loanPurpose },
+  ]);
+  section('Guarantor information');
+  row([
+    { label: 'Guarantor name', value: data.guarantorName },
+    { label: 'Guarantor phone', value: data.guarantorPhone },
+  ]);
+  signatureBlock({ withDateColumn: true });
+
+  // --- FORM 2: NEXT OF KIN DETAILS ----------------------------------------------
+  newPage(FORM_TITLES.nextOfKin);
+  {
+    const noticeLines = wrap(KIN_NOTICE, font, 8.5, CONTENT_W - 36);
+    const h = noticeLines.length * 12 + 16;
+    page.drawRectangle({ x: MARGIN, y: y - h + 6, width: CONTENT_W, height: h, color: LAVENDER });
+    page.drawRectangle({ x: MARGIN, y: y - h + 6, width: 3, height: h, color: rgb(124 / 255, 58 / 255, 237 / 255) });
+    const prefix = 'Notice: ';
+    const prefixW = bold.widthOfTextAtSize(prefix, 8.5);
+    noticeLines.forEach((line, i) => {
+      const x = MARGIN + 16;
+      if (i === 0) {
+        page.drawText(prefix, { x, y: y - 8 - 3, size: 8.5, font: bold, color: PURPLE_DARK });
+        page.drawText(line, { x: x + prefixW, y: y - 11, size: 8.5, font, color: INK });
+      } else {
+        page.drawText(line, { x, y: y - 11 - i * 12, size: 8.5, font, color: INK });
+      }
     });
-    y -= 12;
-    page.drawText(`Date signed: ${formatDate(meta.submittedAt)}`, { x: MARGIN, y, size: 10, font });
-    y -= 24;
-  };
-
-  // --- PAGE 1: APPLICATION FORM -------------------------------------------------
-  drawHeader('LOAN APPLICATION FORM');
-  section('Applicant details');
-  field('Full name', data.fullName);
-  field('Date of birth', data.dob);
-  field('Omang / ID number', data.idNumber);
-  field('Phone number', data.phone);
-  field('Email address', data.email);
-  field('Residential address', data.address);
-  field('Institution / employer', data.institution);
-  field('Monthly allowance / income', formatBwp(data.income));
-  section('Loan request');
-  field('Loan amount requested', formatBwp(data.loanAmount));
-  field('Loan purpose', data.loanPurpose);
-  signatureBlock();
-
-  // --- PAGE 2: TERMS, DECLARATION & CONSENT ------------------------------------
-  newPage('TERMS, DECLARATION & CONSENT');
-  paragraph(`Terms version ${TERMS_VERSION}`, { size: 8, fontRef: font, gap: 8 });
-  for (const clause of TERMS_CLAUSES) {
-    paragraph(clause.title, { size: 9.5, fontRef: bold, gap: 0 });
-    paragraph(clause.body, { size: 9, gap: 6 });
+    y -= h + 14;
   }
+  section('Next of kin information');
+  row([{ label: 'Full name', value: data.kinName }]);
+  row([
+    { label: 'Relationship to applicant', value: data.kinRelationship },
+    { label: 'National ID / Omang number', value: data.kinId },
+  ]);
+  row([
+    { label: 'Mobile number', value: data.kinPhone },
+    { label: 'Alternative number', value: data.kinAltPhone },
+  ]);
+  row([{ label: 'Residential address', value: data.kinAddress }]);
+  section('Applicant declaration');
+  paragraph(KIN_DECLARATION, { size: 8.5, gap: 10 });
+  signatureBlock({ withDateColumn: true });
+
+  // --- FORM 3: ACKNOWLEDGEMENT, CONSENT & DECLARATION ----------------------------
+  newPage(FORM_TITLES.consent);
+  for (const p of CONSENT_PARAGRAPHS) paragraph(p, { size: 9, gap: 8 });
   y -= 4;
-  field('Applicant', data.fullName);
-  field('Omang / ID number', data.idNumber);
-  paragraph('The applicant ticked the consent box confirming acceptance of the terms and declaration above.', { size: 9, fontRef: font });
-  signatureBlock();
+  section('Applicant details');
+  row([{ label: 'Full name', value: data.fullName }]);
+  row([
+    { label: 'Omang / identity number', value: data.idNumber },
+    { label: 'Date', value: signedOn },
+  ]);
+  signatureBlock({ withDateColumn: false });
 
-  // --- PAGE 3: NEXT OF KIN + SUBMISSION RECORD ---------------------------------
-  newPage('NEXT OF KIN DETAILS');
-  field('Full name', data.kinName);
-  field('Relationship to applicant', data.kinRelationship);
-  field('National ID / Omang number', data.kinId);
-  field('Mobile number', data.kinPhone);
-  field('Alternative phone number', data.kinAltPhone);
-  field('Residential address', data.kinAddress);
-  signatureBlock();
+  // For official use only (completed by the Lender after approval)
+  {
+    ensureSpace(170);
+    const panelH = 150;
+    const top = y;
+    page.drawSvgPath(roundedRectPath(CONTENT_W, panelH, 5), { x: MARGIN, y: top, color: PANEL_FILL, borderColor: PANEL_BORDER, borderWidth: 0.8 });
+    drawSpaced('FOR OFFICIAL USE ONLY', MARGIN + 14, top - 20, 8.5, bold, PURPLE_DARK, 0.9);
+    page.drawLine({ start: { x: MARGIN + 14, y: top - 26 }, end: { x: RIGHT - 14, y: top - 26 }, thickness: 0.6, color: PANEL_BORDER });
+    const innerW = (CONTENT_W - 28 - COL_GAP) / 2;
+    const boxes: [string, number, number][] = [
+      ['Authorised representative', MARGIN + 14, top - 42],
+      ['Position', MARGIN + 14 + innerW + COL_GAP, top - 42],
+    ];
+    for (const [label, x, yy] of boxes) {
+      drawSpaced(label.toUpperCase(), x, yy, 6.5, bold, PURPLE, 0.55);
+      page.drawSvgPath(roundedRectPath(innerW, 23, 3), { x, y: yy - 5, color: rgb(1, 1, 1), borderColor: FIELD_BORDER, borderWidth: 0.7 });
+    }
+    drawSpaced('SIGNATURE', MARGIN + 14, top - 90, 6.5, bold, PURPLE, 0.55);
+    drawSpaced('DATE', MARGIN + 14 + innerW + COL_GAP, top - 90, 6.5, bold, PURPLE, 0.55);
+    for (const x of [MARGIN + 14, MARGIN + 14 + innerW + COL_GAP]) {
+      page.drawLine({ start: { x, y: top - 128 }, end: { x: x + innerW, y: top - 128 }, thickness: 0.9, color: PURPLE_DARK });
+    }
+    y = top - panelH - 18;
+  }
 
-  section('Electronic submission record');
-  field('Reference', ref);
-  field('Submitted', `${formatDateTime(meta.submittedAt)} (${TIME_ZONE})`);
-  field('Network address', meta.ipAddress);
-  field('Terms version', TERMS_VERSION);
-  paragraph('A SHA-256 fingerprint of this document is recorded by the Lender at submission to detect later alteration.', { size: 8, fontRef: font });
+  paragraph(ESIGN_NOTE, { size: 7.5, gap: 4, color: SLATE });
+  paragraph(`Reference ${ref}  |  Submitted ${formatDateTime(meta.submittedAt)} (${TIME_ZONE})  |  Network address ${meta.ipAddress}  |  Terms version ${TERMS_VERSION}`, {
+    size: 7.5,
+    gap: 0,
+    color: SLATE,
+  });
 
-  // --- Footers -------------------------------------------------------------------
+  // --- Footers ---------------------------------------------------------------------
   const pages = pdf.getPages();
   pages.forEach((p, i) => {
-    p.drawText(`${LENDER_NAME}  |  Ref ${ref}  |  Page ${i + 1} of ${pages.length}`, {
-      x: MARGIN,
-      y: 36,
-      size: 8,
-      font,
-      color: MUTED,
-    });
+    p.drawLine({ start: { x: MARGIN, y: 50 }, end: { x: RIGHT, y: 50 }, thickness: 0.5, color: rgb(0.9, 0.91, 0.93) });
+    p.drawText(safe(font, `${LENDER_NAME} — ${pageFooters[i] ?? ''}  |  Ref ${ref}`), { x: MARGIN, y: 36, size: 7.5, font, color: SLATE });
+    const right = `Page ${i + 1} of ${pages.length}`;
+    p.drawText(right, { x: RIGHT - font.widthOfTextAtSize(right, 7.5), y: 36, size: 7.5, font, color: SLATE });
   });
 
   return pdf.save();

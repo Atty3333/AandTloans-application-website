@@ -1,51 +1,28 @@
-import { LENDER_NAME } from './config';
-
 /**
- * Agreement wording used on the website AND in the signed PDF.
- * IMPORTANT: have a Botswana-qualified lawyer review this text before going live,
- * then bump TERMS_VERSION in lib/config.ts whenever it changes.
- * Rates, fees and repayment dates are intentionally NOT hard-coded: they are set in the
- * written loan offer issued on approval.
+ * Wording of the three signed documents (taken from the A&T Student Loans legal templates).
+ * Used on the website AND in the generated PDF so they always match.
+ * IMPORTANT: have a Botswana-qualified lawyer review any change, then bump TERMS_VERSION in lib/config.ts.
  */
-export interface TermsClause {
-  title: string;
-  body: string;
-}
+export const FORM_TITLES = {
+  application: { lines: ['LOAN APPLICATION FORM'], footer: 'Official Application Form' },
+  nextOfKin: { lines: ['NEXT OF KIN DETAILS'], footer: 'Next of Kin Form' },
+  consent: { lines: ['ACKNOWLEDGEMENT, CONSENT &', 'DECLARATION'], footer: 'Consent & Declaration' },
+} as const;
 
-export const TERMS_CLAUSES: TermsClause[] = [
-  {
-    title: '1. Application only',
-    body: `Submitting this application does not guarantee approval. ${LENDER_NAME} (the "Lender") may approve, decline or approve a different amount at its discretion.`,
-  },
-  {
-    title: '2. Loan terms',
-    body: 'The approved amount, interest rate, fees, total repayable amount and repayment dates will be set out in a written loan offer. The offer forms part of this agreement once accepted by the applicant.',
-  },
-  {
-    title: '3. Declaration of accuracy',
-    body: 'I declare that all information and documents I have provided are true, accurate, complete and not misleading. I understand that false information may result in rejection of my application or legal action.',
-  },
-  {
-    title: '4. Verification',
-    body: 'I authorise the Lender to verify the information I have supplied, including by contacting my institution or employer and my next of kin.',
-  },
-  {
-    title: '5. Next of kin',
-    body: 'I confirm that my next of kin has agreed to be named and may be contacted by the Lender about this application and, if a loan is granted, about its repayment.',
-  },
-  {
-    title: '6. Default',
-    body: 'If a loan is granted and I fail to repay it as agreed, the Lender may take lawful steps to recover the amount owed, in accordance with the laws of Botswana.',
-  },
-  {
-    title: '7. Personal data',
-    body: 'My personal information, including my Omang number and signature, will be processed by the Lender to assess this application, verify my identity, administer and recover any loan, and meet legal obligations, in line with the Botswana Data Protection Act. It will be stored securely and kept only as long as necessary for those purposes. I may ask the Lender to access or correct my information.',
-  },
-  {
-    title: '8. Electronic signature',
-    body: 'I agree that my drawn signature, together with the date, time and network address recorded at submission, is my binding electronic signature on this document.',
-  },
+export const KIN_NOTICE = 'Please provide details of a close relative or trusted contact. This person is not responsible for the loan.';
+
+export const KIN_DECLARATION =
+  'I confirm that the information provided above is true and accurate. The person named above is my Next of Kin and is not liable for this loan unless a separate Guarantor Agreement is executed.';
+
+export const CONSENT_PARAGRAPHS: readonly string[] = [
+  'I hereby solemnly declare, warrant, and certify that all information, statements, documents, and particulars provided by me in connection with this loan application are true, accurate, complete, and not misleading in any respect.',
+  'I acknowledge and agree that the Lender shall be entitled to rely upon the information furnished by me for the purpose of assessing my application and determining my eligibility for financial assistance.',
+  'I authorise the Lender to verify information relevant to this application and acknowledge that false, incomplete, or misleading information may result in rejection of the application or legal action.',
+  'By signing below, I confirm that I have read, understood, and voluntarily accepted the terms and conditions governing this application and any loan facility that may be granted.',
 ];
 
 export const CONSENT_LABEL =
-  'I have read and accept the declaration and terms above, and I confirm that my next of kin agrees to be contacted.';
+  'I have read and accept the declarations above, I confirm my next of kin agrees to be contacted, and I agree that my drawn signature, with the date, time and network address recorded at submission, is my binding electronic signature. I understand my personal data will be processed to assess this application in line with the Botswana Data Protection Act.';
+
+export const ESIGN_NOTE =
+  'Signed electronically. The date, time and network address recorded at submission form part of this signature. A SHA-256 fingerprint of this document is kept by the Lender to detect later alteration.';

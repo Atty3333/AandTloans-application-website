@@ -1,11 +1,14 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { NextRequest, NextResponse } from 'next/server';
-import { ACTIVE_STATUSES, STORAGE_BUCKET, TERMS_VERSION, formatBwp } from '@/lib/config';
+import { toRow } from '@/lib/applications';
+import { AWAITING_REPLY_STATUSES, STORAGE_BUCKET, TERMS_VERSION, formatBwp } from '@/lib/config';
 import { InvalidSignatureError, buildLoanPdf } from '@/lib/pdf-generator';
 import { rateLimit } from '@/lib/rate-limit';
-import { getServiceClient } from '@/lib/supabase-server';
+import type { SupabaseClient } from '@supabase/supabase-js';
+import { authenticateRequest, getServiceClient } from '@/lib/supabase-server';
 import { verifyTurnstile } from '@/lib/turnstile';
 import { applicationSchema, fieldErrors } from '@/lib/validation';
+import { verifyDocuments } from '@/lib/verify-documents';
 import { notifyAdminWhatsApp } from '@/lib/whatsapp';
 
 export const runtime = 'nodejs';
@@ -31,11 +34,32 @@ export async function POST(req: NextRequest) {
     return fail(429, 'Too many submissions. Please try again later.', {}, { 'Retry-After': String(limit.retryAfterSec) });
   }
 
-  // --- Must be signed in (token is verified against Supabase Auth below) -----------
-  const token = req.headers.get('authorization')?.replace(/^Bearer\s+/i, '').trim();
-  if (!token) return fail(401, 'Please sign in to submit an application.');
+  const auth = await authenticateRequest(req);
+  if (!auth.user) {
+    if (auth.failure === 'misconfigured') {
+      return fail(500, 'The server is not configured correctly. Please contact support.');
+    }
+    return fail(401, 'Your session has expired. Please sign out and sign in again, then resubmit.');
+  }
+  const user = auth.user;
+  if (!user.email_confirmed_at) {
+    return fail(403, 'Please confirm your email address before applying.');
+  }
 
-  // --- Parse + validate ------------------------------------------------------------
+  let supabase: SupabaseClient;
+  try {
+    supabase = getServiceClient();
+  } catch (err) {
+    console.error('[submit-loan] service client unavailable', err);
+    return fail(500, 'The server is not configured correctly. Please contact support.');
+  }
+
+  const userLimit = rateLimit(`submit-user:${user.id}`, RATE_LIMIT, RATE_WINDOW_MS);
+  if (!userLimit.ok) {
+    return fail(429, 'Too many submissions. Please try again later.', {}, { 'Retry-After': String(userLimit.retryAfterSec) });
+  }
+
+  // --- Parse + validate request body -----------------------------------------------
   let raw: unknown;
   try {
     const body = await req.text();
@@ -56,32 +80,24 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const supabase = getServiceClient();
-
-    // --- Verify the applicant's session ----------------------------------------------
-    const { data: userData, error: authError } = await supabase.auth.getUser(token);
-    const user = userData?.user;
-    if (authError || !user) return fail(401, 'Your session has expired. Please sign in again.');
-    if (!user.email_confirmed_at) return fail(403, 'Please confirm your email address before applying.');
-
-    const userLimit = rateLimit(`submit-user:${user.id}`, RATE_LIMIT, RATE_WINDOW_MS);
-    if (!userLimit.ok) {
-      return fail(429, 'Too many submissions. Please try again later.', {}, { 'Retry-After': String(userLimit.retryAfterSec) });
-    }
-
-    // --- One active application per Omang and per account ---------------------------
-    // idNumber is validated to 9 digits and user.id is a UUID, so this filter string is safe.
+    // --- One application awaiting a reply per Omang and per account ---------------------------
     const { data: existing, error: lookupError } = await supabase
       .from('loan_applications')
       .select('id, user_id')
       .or(`id_number.eq.${data.idNumber},user_id.eq.${user.id}`)
-      .in('status', [...ACTIVE_STATUSES])
+      .in('status', [...AWAITING_REPLY_STATUSES])
       .limit(1);
     if (lookupError) throw lookupError;
     if (existing && existing.length > 0) {
-      return fail(409, 'You already have an application in progress, or this Omang number is already in use.', {
-        fieldErrors: { idNumber: 'An application for this Omang is already in progress' },
+      return fail(409, 'You already have an application waiting for a reply, or this Omang number already has one. You can apply again once it has been replied to.', {
+        fieldErrors: { idNumber: 'An application for this Omang is already waiting for a reply' },
       });
+    }
+
+    // --- Supporting documents must really exist in the private bucket --------------
+    const docCheck = await verifyDocuments(supabase, user.id, data.documents);
+    if (!docCheck.ok) {
+      return fail(400, 'Please re-upload the highlighted documents.', { fieldErrors: docCheck.errors });
     }
 
     // --- Build the PDF on the server from validated data ----------------------------
@@ -109,22 +125,8 @@ export async function POST(req: NextRequest) {
     const { error: dbError } = await supabase.from('loan_applications').insert({
       id: applicationId,
       user_id: user.id,
-      full_name: data.fullName,
-      date_of_birth: data.dob,
-      id_number: data.idNumber,
-      phone_number: data.phone,
-      email: data.email,
-      address: data.address,
-      institution: data.institution,
-      monthly_income: data.income,
-      loan_amount_requested: data.loanAmount,
-      loan_purpose: data.loanPurpose,
-      kin_full_name: data.kinName,
-      kin_relationship: data.kinRelationship,
-      kin_id_number: data.kinId,
-      kin_phone: data.kinPhone,
-      kin_alt_phone: data.kinAltPhone ?? null,
-      kin_address: data.kinAddress,
+      ...toRow(data),
+      documents: docCheck.documents,
       consent_given_at: submittedAt.toISOString(),
       terms_version: TERMS_VERSION,
       submitted_ip: ip,
@@ -137,7 +139,7 @@ export async function POST(req: NextRequest) {
     if (dbError) {
       await supabase.storage.from(STORAGE_BUCKET).remove([pdfPath]).catch(() => undefined);
       if (dbError.code === '23505') {
-        return fail(409, 'An application for this Omang number is already in progress.', { fieldErrors: { idNumber: 'An application for this Omang is already in progress' } });
+        return fail(409, 'You already have an application waiting for a reply.', { fieldErrors: { idNumber: 'An application for this Omang is already waiting for a reply' } });
       }
       throw dbError;
     }

@@ -9,13 +9,22 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
+        // Purple palette sampled from the A&T Student Loans legal templates.
         brand: {
-          50: '#f0f4ff',
-          100: '#e0e9fe',
-          600: '#3b3086',
-          700: '#2d236e',
-          900: '#1e164d',
+          50: '#f3ecfe',
+          100: '#e9defc',
+          200: '#ddd6fe',
+          300: '#c4b5fd',
+          400: '#a78bfa',
+          500: '#7c3aed',
+          600: '#5b21b6',
+          700: '#4c1d95',
+          800: '#3b1578',
+          900: '#2e1065',
         },
+      },
+      fontFamily: {
+        heading: ['Verdana', 'Geneva', 'Tahoma', 'sans-serif'],
       },
     },
   },

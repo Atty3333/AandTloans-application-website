@@ -89,19 +89,19 @@ export default function AuthForm() {
     }
   };
 
-  const input = 'w-full mt-1 p-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-brand-600';
+  const input = 'input-box';
 
   return (
-    <form onSubmit={handleSubmit} className="bg-white border rounded-xl shadow-sm p-6 space-y-4 w-full max-w-sm mx-auto">
-      <h2 className="text-lg font-bold text-gray-900">{TITLES[mode]}</h2>
+    <form onSubmit={handleSubmit} className="paper mx-auto w-full max-w-sm space-y-4 p-6">
+      <h2 className="section-title">{TITLES[mode]}</h2>
 
-      <label className="block text-xs font-semibold text-gray-700">
+      <label className="label-caps">
         Email address
         <input type="email" required autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} className={input} />
       </label>
 
       {mode !== 'forgot' && (
-        <label className="block text-xs font-semibold text-gray-700">
+        <label className="label-caps">
           Password
           <input
             type="password"
@@ -116,7 +116,7 @@ export default function AuthForm() {
       )}
 
       {mode === 'signup' && (
-        <label className="block text-xs font-semibold text-gray-700">
+        <label className="label-caps">
           Confirm password
           <input type="password" required minLength={8} autoComplete="new-password" value={confirm} onChange={(e) => setConfirm(e.target.value)} className={input} />
         </label>
@@ -136,7 +136,7 @@ export default function AuthForm() {
       <button
         type="submit"
         disabled={busy}
-        className="w-full bg-brand-600 hover:bg-brand-700 disabled:opacity-60 text-white font-bold py-2.5 rounded-lg flex items-center justify-center gap-2"
+        className="btn-primary w-full"
       >
         {busy && <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />}
         {mode === 'signin' ? 'Sign in' : mode === 'signup' ? 'Create account' : 'Send reset link'}
@@ -145,15 +145,15 @@ export default function AuthForm() {
       <div className="text-xs text-gray-600 flex flex-wrap justify-between gap-2">
         {mode === 'signin' ? (
           <>
-            <button type="button" onClick={() => switchMode('signup')} className="text-brand-600 hover:underline">
+            <button type="button" onClick={() => switchMode('signup')} className="text-brand-700 hover:underline">
               New here? Create an account
             </button>
-            <button type="button" onClick={() => switchMode('forgot')} className="text-brand-600 hover:underline">
+            <button type="button" onClick={() => switchMode('forgot')} className="text-brand-700 hover:underline">
               Forgot password?
             </button>
           </>
         ) : (
-          <button type="button" onClick={() => switchMode('signin')} className="text-brand-600 hover:underline">
+          <button type="button" onClick={() => switchMode('signin')} className="text-brand-700 hover:underline">
             Back to sign in
           </button>
         )}

@@ -44,6 +44,13 @@ CREATE TABLE public.loan_applications (
     kin_alt_phone         TEXT CHECK (kin_alt_phone IS NULL OR kin_alt_phone ~ '^\+267[0-9]{7,8}$'),
     kin_address           TEXT NOT NULL,
 
+    -- Optional guarantor (shown on the Loan Application Form)
+    guarantor_name        TEXT,
+    guarantor_phone       TEXT CHECK (guarantor_phone IS NULL OR guarantor_phone ~ '^\+267[0-9]{7,8}$'),
+
+    -- Supporting documents: [{kind, path, contentType, size}] in the private 'application-documents' bucket
+    documents             JSONB NOT NULL DEFAULT '[]'::jsonb,
+
     -- Consent + audit trail
     consent_given_at      TIMESTAMPTZ NOT NULL,
     terms_version         TEXT NOT NULL,
@@ -59,13 +66,19 @@ CREATE TABLE public.loan_applications (
     status                TEXT NOT NULL DEFAULT 'PENDING'
                           CHECK (status IN ('PENDING', 'APPROVED', 'REJECTED', 'DISBURSED', 'REPAID')),
     status_updated_at     TIMESTAMPTZ,
-    status_updated_by     UUID REFERENCES auth.users (id)
+    status_updated_by     UUID REFERENCES auth.users (id),
+
+    -- Last admin edit of the applicant's details (full history in application_edits)
+    last_edited_at        TIMESTAMPTZ,
+    last_edited_by        UUID REFERENCES auth.users (id)
 );
 
--- One *active* application per Omang. Rejected / repaid borrowers can re-apply.
-CREATE UNIQUE INDEX loan_applications_one_active_per_id
-    ON public.loan_applications (id_number)
-    WHERE status IN ('PENDING', 'APPROVED', 'DISBURSED');
+-- One PENDING application per Omang and per account. Once the lender has replied
+-- (approved / rejected / disbursed / repaid) the applicant may apply again.
+CREATE UNIQUE INDEX loan_applications_one_pending_per_id
+    ON public.loan_applications (id_number) WHERE status = 'PENDING';
+CREATE UNIQUE INDEX loan_applications_one_pending_per_user
+    ON public.loan_applications (user_id) WHERE status = 'PENDING' AND user_id IS NOT NULL;
 
 CREATE INDEX loan_applications_created_at_idx ON public.loan_applications (created_at DESC);
 CREATE INDEX loan_applications_status_idx     ON public.loan_applications (status);
@@ -113,7 +126,7 @@ WITH CHECK (public.is_admin());
 
 -- Applicants see only a limited, read-only view of their OWN applications.
 CREATE OR REPLACE VIEW public.my_loan_applications AS
-SELECT id, created_at, loan_amount_requested, loan_purpose, status
+SELECT id, created_at, loan_amount_requested, loan_purpose, status, status_updated_at
 FROM public.loan_applications
 WHERE user_id = auth.uid();
 
@@ -141,16 +154,39 @@ USING (bucket_id = 'signed-documents' AND public.is_admin());
 --   WHERE email = 'you@example.com';
 -- The user must sign out and in again for the claim to appear in their JWT.
 -- ---------------------------------------------------------------------------
-ALTER TABLE public.loan_applications
-    ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES auth.users (id) ON DELETE SET NULL;
 
-CREATE INDEX IF NOT EXISTS loan_applications_user_id_idx ON public.loan_applications (user_id);
+-- ---------------------------------------------------------------------------
+-- Admin edit audit trail (written only by the server with the service-role key)
+-- ---------------------------------------------------------------------------
+CREATE TABLE public.application_edits (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    application_id  UUID NOT NULL REFERENCES public.loan_applications (id) ON DELETE CASCADE,
+    edited_by       UUID REFERENCES auth.users (id),
+    edited_by_email TEXT,
+    edited_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    changes         JSONB NOT NULL
+);
+CREATE INDEX application_edits_application_idx ON public.application_edits (application_id, edited_at DESC);
+ALTER TABLE public.application_edits ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.application_edits FROM anon, authenticated;
+GRANT SELECT ON public.application_edits TO authenticated;
+CREATE POLICY "Admins can read edit history"
+ON public.application_edits FOR SELECT TO authenticated
+USING (public.is_admin());
 
--- Applicants see only a limited, read-only view of their OWN applications.
-CREATE OR REPLACE VIEW public.my_loan_applications AS
-SELECT id, created_at, loan_amount_requested, loan_purpose, status
-FROM public.loan_applications
-WHERE user_id = auth.uid();
+-- ---------------------------------------------------------------------------
+-- Private bucket for supporting documents (bank statement, Omang front/back, registration letter, student ID)
+-- ---------------------------------------------------------------------------
+INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+VALUES (
+    'application-documents', 'application-documents', FALSE, 10485760,
+    ARRAY['image/jpeg', 'image/png', 'image/webp', 'application/pdf']
+)
+ON CONFLICT (id) DO UPDATE
+SET public = FALSE,
+    file_size_limit = 10485760,
+    allowed_mime_types = ARRAY['image/jpeg', 'image/png', 'image/webp', 'application/pdf'];
 
-REVOKE ALL ON public.my_loan_applications FROM anon, authenticated;
-GRANT SELECT ON public.my_loan_applications TO authenticated;
+CREATE POLICY "Admins can read application documents"
+ON storage.objects FOR SELECT TO authenticated
+USING (bucket_id = 'application-documents' AND public.is_admin());

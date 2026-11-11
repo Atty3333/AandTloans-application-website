@@ -1,7 +1,9 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import { SiteHeader } from '@/components/BrandHeader';
 import { useSession } from '@/lib/use-session';
 
 export default function ResetPasswordPage() {
@@ -32,40 +34,41 @@ export default function ResetPasswordPage() {
     else router.replace('/');
   };
 
-  const input = 'w-full mt-1 p-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-brand-600';
-
   return (
-    <main className="min-h-screen grid place-items-center bg-gray-50 p-4">
-      {session ? (
-        <form onSubmit={submit} className="w-full max-w-sm bg-white border rounded-xl shadow-sm p-6 space-y-4">
-          <h1 className="text-lg font-bold text-gray-900">Choose a new password</h1>
-          <label className="block text-xs font-semibold text-gray-700">
-            New password
-            <input type="password" required minLength={8} autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} className={input} />
-          </label>
-          <label className="block text-xs font-semibold text-gray-700">
-            Confirm password
-            <input type="password" required minLength={8} autoComplete="new-password" value={confirm} onChange={(e) => setConfirm(e.target.value)} className={input} />
-          </label>
-          {error && (
-            <p role="alert" className="text-xs text-red-600">
-              {error}
-            </p>
-          )}
-          <button disabled={busy} className="w-full bg-brand-600 hover:bg-brand-700 disabled:opacity-60 text-white font-bold py-2.5 rounded-lg">
-            {busy ? 'Saving…' : 'Save password'}
-          </button>
-        </form>
-      ) : expired ? (
-        <div className="max-w-sm bg-white border rounded-xl p-6 text-sm text-gray-700 space-y-3">
-          <p>This reset link is invalid or has expired.</p>
-          <a href="/" className="text-brand-600 hover:underline">
-            Back to sign in
-          </a>
-        </div>
-      ) : (
-        <p className="text-sm text-gray-500">Checking your reset link…</p>
-      )}
+    <main className="min-h-screen px-4 py-8">
+      <div className="mx-auto max-w-3xl space-y-8">
+        <SiteHeader subtitle="Reset your password" />
+        {session ? (
+          <form onSubmit={submit} className="paper mx-auto w-full max-w-sm space-y-4 p-6">
+            <h1 className="section-title">Choose a new password</h1>
+            <label className="label-caps">
+              New password
+              <input type="password" required minLength={8} autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} className="input-box" />
+            </label>
+            <label className="label-caps">
+              Confirm password
+              <input type="password" required minLength={8} autoComplete="new-password" value={confirm} onChange={(e) => setConfirm(e.target.value)} className="input-box" />
+            </label>
+            {error && (
+              <p role="alert" className="text-xs text-red-600">
+                {error}
+              </p>
+            )}
+            <button disabled={busy} className="btn-primary w-full">
+              {busy ? 'Saving…' : 'Save password'}
+            </button>
+          </form>
+        ) : expired ? (
+          <div className="paper mx-auto max-w-sm space-y-3 p-6 text-sm text-slate-700">
+            <p>This reset link is invalid or has expired.</p>
+            <Link href="/" className="font-semibold text-brand-700 hover:underline">
+              Back to sign in
+            </Link>
+          </div>
+        ) : (
+          <p className="text-center text-sm text-slate-500">Checking your reset link…</p>
+        )}
+      </div>
     </main>
   );
 }
