@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { NextRequest, NextResponse } from 'next/server';
 import { DOCUMENTS_BUCKET } from '@/lib/config';
-import { EXTENSION_BY_TYPE, MAX_DOCUMENT_BYTES, isAllowedDocumentType, isDocumentKind } from '@/lib/documents';
+import { EXTENSION_BY_TYPE, MAX_DOCUMENT_BYTES, isAllowedDocumentType, isImageType, isUploadKind } from '@/lib/documents';
 import { rateLimit } from '@/lib/rate-limit';
 import { authenticateRequest, getServiceClient } from '@/lib/supabase-server';
 
@@ -32,10 +32,11 @@ export async function POST(req: NextRequest) {
     return fail(400, 'Invalid request body.');
   }
 
-  if (!isDocumentKind(body.kind)) return fail(400, 'Unknown document type.');
+  if (!isUploadKind(body.kind)) return fail(400, 'Unknown document type.');
   if (typeof body.contentType !== 'string' || !isAllowedDocumentType(body.contentType)) {
     return fail(400, 'Unsupported file type. Use JPG, PNG, WebP or PDF.');
   }
+  if (body.kind === 'avatar' && !isImageType(body.contentType)) return fail(400, 'Profile pictures must be a JPG, PNG or WebP image.');
   if (typeof body.size !== 'number' || !(body.size > 0) || body.size > MAX_DOCUMENT_BYTES) {
     return fail(400, 'File is too large (max 10 MB).');
   }

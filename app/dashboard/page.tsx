@@ -3,11 +3,15 @@
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { Clock, Loader2, LogOut, Plus, ShieldCheck } from 'lucide-react';
+import { ChevronRight, Clock, Loader2, LogOut, Plus, ShieldCheck, Upload } from 'lucide-react';
 import { DocFooter, DocHeader, SiteHeader } from '@/components/BrandHeader';
+import ProfileLink from '@/components/ProfileLink';
 import StatusBadge from '@/components/StatusBadge';
 import { formatDate } from '@/lib/applications';
 import { formatBwp, isAwaitingReply, type LoanStatus } from '@/lib/config';
+import { parseProofs } from '@/lib/proofs';
+import { shortRef, STATUS_HINTS } from '@/lib/status';
+import { summarize } from '@/lib/stats';
 import { useSession } from '@/lib/use-session';
 
 interface MyApplication {
@@ -17,6 +21,7 @@ interface MyApplication {
   loan_purpose: string;
   status: LoanStatus;
   status_updated_at: string | null;
+  proof_of_payments: unknown;
 }
 
 /** Applicant home page: current and past loan applications, and a way to apply again once the lender has replied. */
@@ -60,9 +65,11 @@ export default function DashboardPage() {
   const awaiting = apps?.find((a) => isAwaitingReply(a.status));
   const latest = apps?.[0];
   const canApply = apps !== null && !loadError && !awaiting;
+  const summary = apps ? summarize(apps) : null;
+  const needsProof = apps?.filter((a) => a.status === 'APPROVED' && parseProofs(a.proof_of_payments).length === 0) ?? [];
 
   return (
-    <main className="min-h-screen px-4 py-8 sm:px-6 lg:px-8">
+    <main id="main" className="min-h-screen px-4 py-8 sm:px-6 lg:px-8">
       <div className="mx-auto max-w-3xl space-y-6">
         <SiteHeader subtitle={session.user.email ?? undefined} href="/dashboard">
           {isAdmin && (
@@ -70,6 +77,7 @@ export default function DashboardPage() {
               <ShieldCheck className="h-3.5 w-3.5" aria-hidden="true" /> Admin
             </Link>
           )}
+          <ProfileLink />
           <button onClick={() => void supabase.auth.signOut()} className="btn-secondary">
             <LogOut className="h-3.5 w-3.5" aria-hidden="true" /> Sign out
           </button>
@@ -99,14 +107,19 @@ export default function DashboardPage() {
                   <p>
                     <span className="font-bold text-brand-900">Awaiting reply:</span> your application for{' '}
                     <span className="font-semibold">{formatBwp(Number(awaiting.loan_amount_requested))}</span> (Ref{' '}
-                    {awaiting.id.slice(0, 8).toUpperCase()}) was received on {formatDate(awaiting.created_at)}. You can apply for another loan once
-                    we have replied.
+                    {shortRef(awaiting.id)}) was received on {formatDate(awaiting.created_at)}. You can apply for another loan once
+                    we have replied, or{' '}
+                    <Link href={`/dashboard/applications/${awaiting.id}`} className="font-semibold text-brand-800 underline">
+                      open it to view your documents or cancel it
+                    </Link>
+                    .
                   </p>
                 </div>
               ) : latest ? (
                 <p className="notice mb-5">
-                  <span className="font-bold text-brand-900">Replied:</span> your latest application was{' '}
-                  <span className="font-semibold">{latest.status.toLowerCase()}</span>
+                  <span className="font-bold text-brand-900">{latest.status === 'CANCELLED' ? 'Cancelled:' : 'Replied:'}</span>{' '}
+                  {latest.status === 'CANCELLED' ? 'you cancelled your latest application' : 'your latest application was'}{' '}
+                  {latest.status === 'CANCELLED' ? '' : <span className="font-semibold">{latest.status.toLowerCase()}</span>}
                   {latest.status_updated_at ? ` on ${formatDate(latest.status_updated_at)}` : ''}. You can apply for another loan whenever you are
                   ready.
                 </p>
@@ -115,6 +128,31 @@ export default function DashboardPage() {
                   <span className="font-bold text-brand-900">Welcome.</span> You have not applied yet. Apply below. You will need your bank
                   statement, Omang (front and back), registration letter and student ID.
                 </p>
+              )}
+
+              {needsProof.map((a) => (
+                <Link key={a.id} href={`/dashboard/applications/${a.id}`} className="notice mb-5 flex items-start gap-3 hover:bg-brand-100">
+                  <Upload className="mt-0.5 h-4 w-4 shrink-0 text-brand-700" aria-hidden="true" />
+                  <span>
+                    <span className="font-bold text-brand-900">Your loan was approved.</span> Paid it back? Open application{' '}
+                    {shortRef(a.id)} ({formatBwp(Number(a.loan_amount_requested))}) and upload your proof of payment.
+                  </span>
+                </Link>
+              ))}
+
+              {summary && summary.total > 0 && (
+                <ul className="mb-5 grid grid-cols-3 gap-2 text-center" aria-label="Your loans at a glance">
+                  {[
+                    ['Applications', String(summary.total)],
+                    ['Active', String(summary.byStatus.APPROVED + summary.byStatus.DISBURSED)],
+                    ['Repaid', String(summary.byStatus.REPAID)],
+                  ].map(([label, value]) => (
+                    <li key={label} className="rounded-lg border border-brand-100 bg-brand-50/60 p-2">
+                      <span className="block text-lg font-bold text-brand-900">{value}</span>
+                      <span className="block text-[10px] font-bold uppercase tracking-wide text-slate-500">{label}</span>
+                    </li>
+                  ))}
+                </ul>
               )}
 
               {canApply ? (
@@ -133,16 +171,26 @@ export default function DashboardPage() {
               ) : (
                 <ul className="divide-y divide-brand-100">
                   {apps.map((a) => (
-                    <li key={a.id} className="flex flex-wrap items-center justify-between gap-2 py-3 text-sm">
-                      <span>
-                        <span className="font-semibold text-slate-900">{formatBwp(Number(a.loan_amount_requested))}</span>
-                        <span className="text-slate-500"> · {a.loan_purpose}</span>
-                        <span className="block text-xs text-slate-500">
-                          Ref {a.id.slice(0, 8).toUpperCase()} · Applied {formatDate(a.created_at)}
-                          {!isAwaitingReply(a.status) && a.status_updated_at ? ` · Replied ${formatDate(a.status_updated_at)}` : ''}
+                    <li key={a.id}>
+                      <Link
+                        href={`/dashboard/applications/${a.id}`}
+                        className="flex flex-wrap items-center justify-between gap-2 rounded-md py-3 text-sm hover:bg-brand-50 focus:outline-none focus:ring-2 focus:ring-brand-300"
+                      >
+                        <span>
+                          <span className="font-semibold text-slate-900">{formatBwp(Number(a.loan_amount_requested))}</span>
+                          <span className="text-slate-500"> · {a.loan_purpose}</span>
+                          <span className="block text-xs text-slate-500">
+                            Ref {shortRef(a.id)} · Applied {formatDate(a.created_at)}
+                            {!isAwaitingReply(a.status) && a.status_updated_at ? ` · ${a.status === 'CANCELLED' ? 'Cancelled' : 'Replied'} ${formatDate(a.status_updated_at)}` : ''}
+                            {a.status === 'APPROVED' ? ` · ${parseProofs(a.proof_of_payments).length} proof(s) of payment` : ''}
+                          </span>
+                          <span className="mt-0.5 block max-w-md text-xs text-slate-500">{STATUS_HINTS[a.status]}</span>
                         </span>
-                      </span>
-                      <StatusBadge status={a.status} />
+                        <span className="flex items-center gap-1">
+                          <StatusBadge status={a.status} />
+                          <ChevronRight className="h-4 w-4 text-slate-400" aria-hidden="true" />
+                        </span>
+                      </Link>
                     </li>
                   ))}
                 </ul>

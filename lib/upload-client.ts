@@ -1,11 +1,12 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { DOCUMENTS_BUCKET } from './config';
-import { checkDocumentFile, type DocumentKind } from './documents';
+import { checkDocumentFile, isImageType, type UploadKind } from './documents';
 
 /** Uploads one supporting document straight to the private bucket via a server-issued signed URL. Returns its storage path. */
-export async function uploadDocument(supabase: SupabaseClient, kind: DocumentKind, file: File): Promise<string> {
+export async function uploadDocument(supabase: SupabaseClient, kind: UploadKind, file: File): Promise<string> {
   const problem = checkDocumentFile(file);
   if (problem) throw new Error(problem);
+  if (kind === 'avatar' && !isImageType(file.type)) throw new Error('Profile pictures must be a JPG, PNG or WebP image.');
 
   const { data: sessionData } = await supabase.auth.getSession();
   const token = sessionData.session?.access_token;

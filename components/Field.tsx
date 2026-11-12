@@ -16,6 +16,8 @@ interface FieldProps {
   max?: number | string;
   maxLength?: number;
   wide?: boolean;
+  /** Shown but not editable (e.g. a confidential value). */
+  readOnly?: boolean;
 }
 
 export default function Field({
@@ -34,6 +36,7 @@ export default function Field({
   max,
   maxLength,
   wide = false,
+  readOnly = false,
 }: FieldProps) {
   const id = `field-${name}`;
   const describedBy = error ? `${id}-error` : hint ? `${id}-hint` : undefined;
@@ -49,7 +52,8 @@ export default function Field({
         type={type}
         value={value}
         onChange={(e) => onChange(name, e.target.value)}
-        required={required}
+        required={required && !readOnly}
+        readOnly={readOnly || undefined}
         autoComplete={autoComplete}
         inputMode={inputMode}
         placeholder={placeholder}
@@ -59,7 +63,7 @@ export default function Field({
         step={type === 'number' ? '0.01' : undefined}
         aria-invalid={error ? true : undefined}
         aria-describedby={describedBy}
-        className={`input-box ${error ? '!border-red-500 !bg-red-50' : ''}`}
+        className={`input-box ${readOnly ? 'cursor-not-allowed !bg-slate-100 font-semibold italic text-slate-600' : ''} ${error ? '!border-red-500 !bg-red-50' : ''}`}
       />
       {error ? (
         <p id={`${id}-error`} role="alert" className="mt-1 text-xs text-red-600">

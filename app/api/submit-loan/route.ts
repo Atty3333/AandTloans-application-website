@@ -1,3 +1,4 @@
+import { shortRef } from '@/lib/status';
 import { createHash, randomUUID } from 'node:crypto';
 import { NextRequest, NextResponse } from 'next/server';
 import { toRow } from '@/lib/applications';
@@ -8,6 +9,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { authenticateRequest, getServiceClient } from '@/lib/supabase-server';
 import { verifyTurnstile } from '@/lib/turnstile';
 import { applicationSchema, fieldErrors } from '@/lib/validation';
+import { seedProfileFromApplication } from '@/lib/profile-sync';
 import { verifyDocuments } from '@/lib/verify-documents';
 import { notifyAdminWhatsApp } from '@/lib/whatsapp';
 
@@ -144,6 +146,9 @@ export async function POST(req: NextRequest) {
       throw dbError;
     }
 
+    // --- Remember the details and documents on the applicant's profile (best effort, never overwrites) ---
+    await seedProfileFromApplication(supabase, user, data, docCheck.documents);
+
     // --- Notify admin (best effort: never fails the applicant) ----------------------
     const { data: signed, error: signError } = await supabase.storage
       .from(STORAGE_BUCKET)
@@ -167,7 +172,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    return NextResponse.json({ success: true, reference: applicationId.slice(0, 8).toUpperCase() });
+    return NextResponse.json({ success: true, reference: shortRef(applicationId) });
   } catch (err) {
     console.error('[submit-loan] unexpected error', err);
     return fail(500, 'Something went wrong while submitting. Please try again in a moment.');

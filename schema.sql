@@ -190,3 +190,312 @@ SET public = FALSE,
 CREATE POLICY "Admins can read application documents"
 ON storage.objects FOR SELECT TO authenticated
 USING (bucket_id = 'application-documents' AND public.is_admin());
+
+
+
+-- A&T Student Loans — migration 003. Run ONCE in the Supabase SQL editor (safe to re-run).
+-- Works on a database created from ANY earlier schema.sql: it also adds everything migration 002 added.
+-- Adds: applicant accounts, supporting-document storage, optional guarantor, admin edit audit trail,
+--       and "one PENDING application at a time" (a new loan can be requested once the last one is replied to).
+
+-- ---------------------------------------------------------------------------
+-- Applicant accounts (was migration 002)
+-- ---------------------------------------------------------------------------
+ALTER TABLE public.loan_applications
+    ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES auth.users (id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS loan_applications_user_id_idx ON public.loan_applications (user_id);
+
+-- ---------------------------------------------------------------------------
+-- New columns
+-- ---------------------------------------------------------------------------
+ALTER TABLE public.loan_applications
+    ADD COLUMN IF NOT EXISTS guarantor_name  TEXT,
+    ADD COLUMN IF NOT EXISTS guarantor_phone TEXT,
+    ADD COLUMN IF NOT EXISTS documents       JSONB NOT NULL DEFAULT '[]'::jsonb,   -- [{kind, path, contentType, size}]
+    ADD COLUMN IF NOT EXISTS last_edited_at  TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS last_edited_by  UUID REFERENCES auth.users (id);
+
+ALTER TABLE public.loan_applications DROP CONSTRAINT IF EXISTS loan_applications_guarantor_phone_check;
+ALTER TABLE public.loan_applications
+    ADD CONSTRAINT loan_applications_guarantor_phone_check
+    CHECK (guarantor_phone IS NULL OR guarantor_phone ~ '^\+267[0-9]{7,8}$');
+
+-- ---------------------------------------------------------------------------
+-- "Replied to" rule: only ONE pending application per Omang and per account.
+-- Once the lender replies (approved / rejected / disbursed / repaid) the applicant may apply again.
+-- ---------------------------------------------------------------------------
+DROP INDEX IF EXISTS public.loan_applications_one_active_per_id;
+CREATE UNIQUE INDEX IF NOT EXISTS loan_applications_one_pending_per_id
+    ON public.loan_applications (id_number) WHERE status = 'PENDING';
+CREATE UNIQUE INDEX IF NOT EXISTS loan_applications_one_pending_per_user
+    ON public.loan_applications (user_id) WHERE status = 'PENDING' AND user_id IS NOT NULL;
+
+-- ---------------------------------------------------------------------------
+-- Applicant's own read-only view (adds status_updated_at = "replied on")
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE VIEW public.my_loan_applications AS
+SELECT id, created_at, loan_amount_requested, loan_purpose, status, status_updated_at
+FROM public.loan_applications
+WHERE user_id = auth.uid();
+
+REVOKE ALL ON public.my_loan_applications FROM anon, authenticated;
+GRANT SELECT ON public.my_loan_applications TO authenticated;
+
+-- ---------------------------------------------------------------------------
+-- Admin edit audit trail (written only by the server with the service-role key)
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS public.application_edits (
+    id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    application_id UUID NOT NULL REFERENCES public.loan_applications (id) ON DELETE CASCADE,
+    edited_by      UUID REFERENCES auth.users (id),
+    edited_by_email TEXT,
+    edited_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    changes        JSONB NOT NULL            -- { "full_name": {"from": "...", "to": "..."}, ... }
+);
+CREATE INDEX IF NOT EXISTS application_edits_application_idx ON public.application_edits (application_id, edited_at DESC);
+
+ALTER TABLE public.application_edits ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.application_edits FROM anon, authenticated;
+GRANT SELECT ON public.application_edits TO authenticated;
+
+DROP POLICY IF EXISTS "Admins can read edit history" ON public.application_edits;
+CREATE POLICY "Admins can read edit history"
+ON public.application_edits FOR SELECT TO authenticated
+USING (public.is_admin());
+
+-- ---------------------------------------------------------------------------
+-- Private bucket for supporting documents (bank statement, Omang, letters, student ID)
+-- Uploads happen through short-lived signed upload URLs issued by the API route.
+-- ---------------------------------------------------------------------------
+INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+VALUES (
+    'application-documents', 'application-documents', FALSE, 10485760,
+    ARRAY['image/jpeg', 'image/png', 'image/webp', 'application/pdf']
+)
+ON CONFLICT (id) DO UPDATE
+SET public = FALSE,
+    file_size_limit = 10485760,
+    allowed_mime_types = ARRAY['image/jpeg', 'image/png', 'image/webp', 'application/pdf'];
+
+DROP POLICY IF EXISTS "Admins can read application documents" ON storage.objects;
+CREATE POLICY "Admins can read application documents"
+ON storage.objects FOR SELECT TO authenticated
+USING (bucket_id = 'application-documents' AND public.is_admin());
+
+-- ---------------------------------------------------------------------------
+-- Check (run after the migration; every line should say true / have rows)
+-- ---------------------------------------------------------------------------
+-- SELECT column_name FROM information_schema.columns WHERE table_name = 'loan_applications'
+--   AND column_name IN ('user_id','documents','guarantor_name','guarantor_phone','last_edited_at');   -- 5 rows
+-- SELECT id, public FROM storage.buckets WHERE id IN ('signed-documents','application-documents'); -- both public = false
+
+
+
+-- A&T Student Loans — migration 004. Run ONCE in the Supabase SQL editor (safe to re-run).
+-- Requires migration_003 (or a schema.sql v2 install) to have been applied first.
+-- Adds: WhatsApp number, proof of payment (max 3 per application), user profiles, profile edit audit,
+--       and read access for users to their OWN files in the private documents bucket.
+
+-- ---------------------------------------------------------------------------
+-- loan_applications: WhatsApp number + proofs of payment
+-- ---------------------------------------------------------------------------
+ALTER TABLE public.loan_applications
+    ADD COLUMN IF NOT EXISTS whatsapp_number   TEXT,
+    ADD COLUMN IF NOT EXISTS proof_of_payments JSONB NOT NULL DEFAULT '[]'::jsonb;  -- [{path, contentType, size, uploadedAt, uploadedBy}]
+
+ALTER TABLE public.loan_applications DROP CONSTRAINT IF EXISTS loan_applications_whatsapp_number_check;
+ALTER TABLE public.loan_applications
+    ADD CONSTRAINT loan_applications_whatsapp_number_check
+    CHECK (whatsapp_number IS NULL OR whatsapp_number ~ '^\+267[0-9]{7,8}$');
+
+ALTER TABLE public.loan_applications DROP CONSTRAINT IF EXISTS loan_applications_proof_limit_check;
+ALTER TABLE public.loan_applications
+    ADD CONSTRAINT loan_applications_proof_limit_check
+    CHECK (jsonb_typeof(proof_of_payments) = 'array' AND jsonb_array_length(proof_of_payments) <= 3);
+
+-- Applicant's read-only view (new columns appended at the end).
+CREATE OR REPLACE VIEW public.my_loan_applications AS
+SELECT id, created_at, loan_amount_requested, loan_purpose, status, status_updated_at,
+       whatsapp_number, proof_of_payments
+FROM public.loan_applications
+WHERE user_id = auth.uid();
+
+REVOKE ALL ON public.my_loan_applications FROM anon, authenticated;
+GRANT SELECT ON public.my_loan_applications TO authenticated;
+
+-- ---------------------------------------------------------------------------
+-- Atomic proof-of-payment helpers. Only the server (service_role) may call them;
+-- all authorisation (owner / admin / APPROVED-only) is enforced in the API route.
+-- p_required_status = NULL means "any status" (admin).
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION public.add_proof_of_payment(
+    p_application_id UUID, p_proof JSONB, p_max INT, p_required_status TEXT
+) RETURNS JSONB
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v public.loan_applications; r JSONB;
+BEGIN
+    SELECT * INTO v FROM public.loan_applications WHERE id = p_application_id FOR UPDATE;
+    IF NOT FOUND THEN RAISE EXCEPTION 'application_not_found'; END IF;
+    IF p_required_status IS NOT NULL AND v.status <> p_required_status THEN RAISE EXCEPTION 'status_not_allowed'; END IF;
+    IF jsonb_array_length(v.proof_of_payments) >= p_max THEN RAISE EXCEPTION 'proof_limit_reached'; END IF;
+    IF v.proof_of_payments @> jsonb_build_array(jsonb_build_object('path', p_proof ->> 'path')) THEN RAISE EXCEPTION 'duplicate_proof'; END IF;
+    UPDATE public.loan_applications
+       SET proof_of_payments = proof_of_payments || jsonb_build_array(p_proof)
+     WHERE id = p_application_id
+    RETURNING proof_of_payments INTO r;
+    RETURN r;
+END $$;
+
+CREATE OR REPLACE FUNCTION public.replace_proof_of_payment(
+    p_application_id UUID, p_old_path TEXT, p_proof JSONB, p_required_status TEXT
+) RETURNS JSONB
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v public.loan_applications; r JSONB;
+BEGIN
+    SELECT * INTO v FROM public.loan_applications WHERE id = p_application_id FOR UPDATE;
+    IF NOT FOUND THEN RAISE EXCEPTION 'application_not_found'; END IF;
+    IF p_required_status IS NOT NULL AND v.status <> p_required_status THEN RAISE EXCEPTION 'status_not_allowed'; END IF;
+    IF NOT (v.proof_of_payments @> jsonb_build_array(jsonb_build_object('path', p_old_path))) THEN RAISE EXCEPTION 'proof_not_found'; END IF;
+    IF p_proof ->> 'path' <> p_old_path
+       AND v.proof_of_payments @> jsonb_build_array(jsonb_build_object('path', p_proof ->> 'path')) THEN RAISE EXCEPTION 'duplicate_proof'; END IF;
+    UPDATE public.loan_applications
+       SET proof_of_payments = (
+           SELECT COALESCE(jsonb_agg(CASE WHEN e ->> 'path' = p_old_path THEN p_proof ELSE e END ORDER BY ord), '[]'::jsonb)
+             FROM jsonb_array_elements(proof_of_payments) WITH ORDINALITY AS t(e, ord)
+       )
+     WHERE id = p_application_id
+    RETURNING proof_of_payments INTO r;
+    RETURN r;
+END $$;
+
+CREATE OR REPLACE FUNCTION public.remove_proof_of_payment(
+    p_application_id UUID, p_path TEXT, p_required_status TEXT
+) RETURNS JSONB
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v public.loan_applications; r JSONB;
+BEGIN
+    SELECT * INTO v FROM public.loan_applications WHERE id = p_application_id FOR UPDATE;
+    IF NOT FOUND THEN RAISE EXCEPTION 'application_not_found'; END IF;
+    IF p_required_status IS NOT NULL AND v.status <> p_required_status THEN RAISE EXCEPTION 'status_not_allowed'; END IF;
+    IF NOT (v.proof_of_payments @> jsonb_build_array(jsonb_build_object('path', p_path))) THEN RAISE EXCEPTION 'proof_not_found'; END IF;
+    UPDATE public.loan_applications
+       SET proof_of_payments = (
+           SELECT COALESCE(jsonb_agg(e ORDER BY ord), '[]'::jsonb)
+             FROM jsonb_array_elements(proof_of_payments) WITH ORDINALITY AS t(e, ord)
+            WHERE e ->> 'path' <> p_path
+       )
+     WHERE id = p_application_id
+    RETURNING proof_of_payments INTO r;
+    RETURN r;
+END $$;
+
+REVOKE ALL ON FUNCTION public.add_proof_of_payment(UUID, JSONB, INT, TEXT)       FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.replace_proof_of_payment(UUID, TEXT, JSONB, TEXT)  FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.remove_proof_of_payment(UUID, TEXT, TEXT)          FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.add_proof_of_payment(UUID, JSONB, INT, TEXT)       TO service_role;
+GRANT EXECUTE ON FUNCTION public.replace_proof_of_payment(UUID, TEXT, JSONB, TEXT)  TO service_role;
+GRANT EXECUTE ON FUNCTION public.remove_proof_of_payment(UUID, TEXT, TEXT)          TO service_role;
+
+-- ---------------------------------------------------------------------------
+-- Profiles: one row per account. Written only by the server (service role).
+-- Users read their own row; admins read all rows.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS public.profiles (
+    user_id          UUID PRIMARY KEY REFERENCES auth.users (id) ON DELETE CASCADE,
+    email            TEXT,
+    full_name        TEXT CHECK (full_name IS NULL OR char_length(full_name) BETWEEN 2 AND 120),
+    date_of_birth    DATE,
+    id_number        TEXT CHECK (id_number IS NULL OR id_number ~ '^[0-9]{9}$'),
+    phone_number     TEXT CHECK (phone_number IS NULL OR phone_number ~ '^\+267[0-9]{7,8}$'),   -- Pay2Cell number
+    whatsapp_number  TEXT CHECK (whatsapp_number IS NULL OR whatsapp_number ~ '^\+267[0-9]{7,8}$'),
+    address          TEXT,
+    institution      TEXT,
+    monthly_income   NUMERIC(12, 2) CHECK (monthly_income IS NULL OR monthly_income >= 0),
+    kin_full_name    TEXT,
+    kin_relationship TEXT,
+    kin_id_number    TEXT,
+    kin_phone        TEXT CHECK (kin_phone IS NULL OR kin_phone ~ '^\+267[0-9]{7,8}$'),
+    kin_alt_phone    TEXT CHECK (kin_alt_phone IS NULL OR kin_alt_phone ~ '^\+267[0-9]{7,8}$'),
+    kin_address      TEXT,
+    avatar_path      TEXT,                                   -- private bucket path (profile picture)
+    documents        JSONB NOT NULL DEFAULT '[]'::jsonb,     -- [{kind, path, contentType, size}] saved loan documents
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_edited_at   TIMESTAMPTZ,                            -- last ADMIN edit
+    last_edited_by   UUID REFERENCES auth.users (id)
+);
+CREATE INDEX IF NOT EXISTS profiles_id_number_idx ON public.profiles (id_number);
+CREATE INDEX IF NOT EXISTS profiles_updated_at_idx ON public.profiles (updated_at DESC);
+
+ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.profiles FROM anon, authenticated;
+GRANT SELECT ON public.profiles TO authenticated;
+
+DROP POLICY IF EXISTS "Users read own profile" ON public.profiles;
+CREATE POLICY "Users read own profile" ON public.profiles FOR SELECT TO authenticated
+USING (user_id = auth.uid() OR public.is_admin());
+
+CREATE TABLE IF NOT EXISTS public.profile_edits (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id         UUID NOT NULL REFERENCES public.profiles (user_id) ON DELETE CASCADE,
+    edited_by       UUID REFERENCES auth.users (id),
+    edited_by_email TEXT,
+    edited_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    changes         JSONB NOT NULL
+);
+CREATE INDEX IF NOT EXISTS profile_edits_user_idx ON public.profile_edits (user_id, edited_at DESC);
+ALTER TABLE public.profile_edits ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.profile_edits FROM anon, authenticated;
+GRANT SELECT ON public.profile_edits TO authenticated;
+DROP POLICY IF EXISTS "Admins read profile edits" ON public.profile_edits;
+CREATE POLICY "Admins read profile edits" ON public.profile_edits FOR SELECT TO authenticated USING (public.is_admin());
+
+-- ---------------------------------------------------------------------------
+-- Storage: users may read ONLY files inside their own folder (<user id>/...) of the private documents bucket
+-- (profile picture, saved documents). Proofs live in proofs/<application id>/ and are served by the API.
+-- ---------------------------------------------------------------------------
+DROP POLICY IF EXISTS "Users can read own application documents" ON storage.objects;
+CREATE POLICY "Users can read own application documents"
+ON storage.objects FOR SELECT TO authenticated
+USING (bucket_id = 'application-documents' AND (storage.foldername(name))[1] = auth.uid()::text);
+
+-- ---------------------------------------------------------------------------
+-- Check (run afterwards):
+-- SELECT column_name FROM information_schema.columns WHERE table_name = 'loan_applications'
+--   AND column_name IN ('whatsapp_number','proof_of_payments');                      -- 2 rows
+-- SELECT to_regclass('public.profiles'), to_regclass('public.profile_edits');         -- both not null
+-- ---------------------------------------------------------------------------
+
+
+-- A&T Student Loans — migration 005. Run ONCE in the Supabase SQL editor (safe to re-run).
+-- Requires migration 004. Adds:
+--   * CANCELLED loan status (applicants may cancel their own application while it is PENDING)
+--   * `documents` in the applicant's read-only view (so they can see the files attached to an application)
+--   * profiles.is_staff (admin accounts: their monthly income is shown as "Confidential" and never stored)
+
+-- 1. Allow the CANCELLED status.
+ALTER TABLE public.loan_applications DROP CONSTRAINT IF EXISTS loan_applications_status_check;
+ALTER TABLE public.loan_applications
+    ADD CONSTRAINT loan_applications_status_check
+    CHECK (status IN ('PENDING', 'APPROVED', 'REJECTED', 'DISBURSED', 'REPAID', 'CANCELLED'));
+-- The one-PENDING-per-Omang / per-account indexes only cover PENDING rows, so cancelling frees the applicant to apply again.
+
+-- 2. Applicant view: new column appended at the end (CREATE OR REPLACE VIEW can only append).
+CREATE OR REPLACE VIEW public.my_loan_applications AS
+SELECT id, created_at, loan_amount_requested, loan_purpose, status, status_updated_at,
+       whatsapp_number, proof_of_payments, documents
+FROM public.loan_applications
+WHERE user_id = auth.uid();
+
+REVOKE ALL ON public.my_loan_applications FROM anon, authenticated;
+GRANT SELECT ON public.my_loan_applications TO authenticated;
+
+-- 3. Staff flag on profiles (set by the server from the account's admin role).
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS is_staff BOOLEAN NOT NULL DEFAULT FALSE;
+UPDATE public.profiles p SET monthly_income = NULL, is_staff = TRUE
+  FROM auth.users u
+ WHERE u.id = p.user_id AND COALESCE(u.raw_app_meta_data ->> 'role', '') = 'admin';
+
+-- Check:
+-- SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = 'loan_applications_status_check';  -- contains CANCELLED
+-- SELECT column_name FROM information_schema.columns WHERE table_name = 'my_loan_applications';           -- ends with documents

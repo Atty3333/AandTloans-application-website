@@ -36,3 +36,19 @@
     @apply rounded-xl border border-purple-300 bg-[#faf5ff] p-4;
   }
 }
+
+/* Print / "Save as PDF" of an application page: only the document card, no page chrome. */
+@media print {
+  header,
+  .no-print,
+  button {
+    display: none !important;
+  }
+  body {
+    background: #fff;
+  }
+  .paper {
+    border: 0;
+    box-shadow: none;
+  }
+}

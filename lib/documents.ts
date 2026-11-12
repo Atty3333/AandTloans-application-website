@@ -31,6 +31,13 @@ export const EXTENSION_BY_TYPE: Record<AllowedDocumentType, string> = {
 };
 
 export const isAllowedDocumentType = (t: string): t is AllowedDocumentType => (ALLOWED_DOCUMENT_TYPES as readonly string[]).includes(t);
+/** Everything the applicant may upload through /api/upload-url: the five loan documents plus the profile picture. */
+export const UPLOAD_KINDS = [...DOCUMENT_KINDS, 'avatar'] as const;
+export type UploadKind = (typeof UPLOAD_KINDS)[number];
+export const isUploadKind = (k: unknown): k is UploadKind => typeof k === 'string' && (UPLOAD_KINDS as readonly string[]).includes(k);
+export const IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp'] as const;
+export const isImageType = (t: string): boolean => (IMAGE_TYPES as readonly string[]).includes(t);
+
 export const isDocumentKind = (k: unknown): k is DocumentKind => typeof k === 'string' && (DOCUMENT_KINDS as readonly string[]).includes(k);
 
 /** Returns an error message when the file is not acceptable, otherwise null. */
@@ -44,14 +51,25 @@ export function checkDocumentFile(file: { type: string; size: number }): string 
 /** Storage path issued by /api/upload-url: `<userId>/<kind>-<8 hex>.<ext>` */
 export const DOCUMENT_PATH_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/([a-z_]+)-[0-9a-f]{8}\.(jpg|png|webp|pdf)$/;
 
-export function pathMatchesKind(path: string, kind: DocumentKind, userId: string): boolean {
+export function pathMatchesKind(path: string, kind: UploadKind, userId: string): boolean {
   const m = DOCUMENT_PATH_RE.exec(path);
   return !!m && m[1] === kind && path.startsWith(`${userId}/`);
 }
+
+/** Short label for a stored path, e.g. `bank_statement-1a2b3c4d.pdf`. */
+export const fileNameFromPath = (path: string): string => path.slice(path.lastIndexOf('/') + 1);
 
 export interface StoredDocument {
   kind: DocumentKind;
   path: string;
   contentType: string;
   size: number;
+}
+
+/** Defensive read of a documents JSONB column: malformed entries are dropped, known kinds only, in display order. */
+export function parseDocuments(value: unknown): StoredDocument[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((d): d is StoredDocument => !!d && typeof d === 'object' && isDocumentKind((d as StoredDocument).kind) && typeof (d as StoredDocument).path === 'string')
+    .sort((a, b) => DOCUMENT_KINDS.indexOf(a.kind) - DOCUMENT_KINDS.indexOf(b.kind));
 }

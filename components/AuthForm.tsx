@@ -2,6 +2,8 @@
 
 import React, { useState } from 'react';
 import { Loader2 } from 'lucide-react';
+import PasswordInput from '@/components/PasswordInput';
+import PasswordStrength from '@/components/PasswordStrength';
 import { getBrowserClient } from '@/lib/supabase-browser';
 
 type Mode = 'signin' | 'signup' | 'forgot';
@@ -101,26 +103,17 @@ export default function AuthForm() {
       </label>
 
       {mode !== 'forgot' && (
-        <label className="label-caps">
-          Password
-          <input
-            type="password"
-            required
-            minLength={8}
-            autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            className={input}
-          />
-        </label>
+        <PasswordInput
+          label="Password"
+          value={password}
+          onChange={setPassword}
+          autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
+          describedBy={mode === 'signup' ? 'pw-strength' : undefined}
+        />
       )}
+      {mode === 'signup' && <PasswordStrength id="pw-strength" password={password} />}
 
-      {mode === 'signup' && (
-        <label className="label-caps">
-          Confirm password
-          <input type="password" required minLength={8} autoComplete="new-password" value={confirm} onChange={(e) => setConfirm(e.target.value)} className={input} />
-        </label>
-      )}
+      {mode === 'signup' && <PasswordInput label="Confirm password" value={confirm} onChange={setConfirm} autoComplete="new-password" />}
 
       {error && (
         <p role="alert" className="text-xs text-red-600">

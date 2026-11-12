@@ -1,8 +1,8 @@
 'use client';
 
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
-import { CheckCircle2, Loader2, Send, AlertCircle } from 'lucide-react';
+import { CheckCircle2, Loader2, Send, AlertCircle, RotateCcw } from 'lucide-react';
 import { DocFooter, DocHeader } from '@/components/BrandHeader';
 import DocumentUpload, { type UploadedDocument } from '@/components/DocumentUpload';
 import Field from '@/components/Field';
@@ -10,7 +10,11 @@ import SignatureCanvas from '@/components/SignatureCanvas';
 import TurnstileWidget from '@/components/TurnstileWidget';
 import { CONSENT_LABEL, CONSENT_PARAGRAPHS, FORM_TITLES, KIN_DECLARATION, KIN_NOTICE } from '@/lib/terms';
 import { CONTACT_EMAIL, LOAN_MAX, LOAN_MIN } from '@/lib/config';
-import { DOCUMENT_SPECS, type DocumentKind } from '@/lib/documents';
+import { openPrivateFile } from '@/lib/client-files';
+import { DOCUMENT_SPECS, fileNameFromPath, type DocumentKind } from '@/lib/documents';
+import { clearDraft, loadDraft, saveDraft, DRAFT_FIELDS } from '@/lib/draft';
+import { formatDateTime } from '@/lib/applications';
+import { PROFILE_FIELDS, profileRowToValues, type ProfileRow } from '@/lib/profile';
 import { uploadDocument } from '@/lib/upload-client';
 import { applicationSchema, fieldErrors } from '@/lib/validation';
 import { createClient } from '@/lib/supabase-browser';
@@ -20,6 +24,7 @@ const INITIAL = {
   dob: '',
   idNumber: '',
   phone: '',
+  whatsappNumber: '',
   email: '',
   address: '',
   institution: '',
@@ -38,6 +43,9 @@ const INITIAL = {
 
 type Values = typeof INITIAL;
 type Errors = Record<string, string>;
+
+/** Tap-to-fill loan amounts: the minimum, the midpoint and the maximum. */
+const QUICK_AMOUNTS = Array.from(new Set([LOAN_MIN, Math.round((LOAN_MIN + LOAN_MAX) / 2 / 10) * 10, LOAN_MAX])).filter((n) => n >= LOAN_MIN && n <= LOAN_MAX);
 
 const TURNSTILE_SITE_KEY = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY ?? '';
 
@@ -58,8 +66,88 @@ export default function ApplicationForm({ defaultEmail, onSubmitted }: Applicati
   const [loading, setLoading] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [reference, setReference] = useState<string | null>(null);
+  const [whatsappSame, setWhatsappSame] = useState(false);
+  const [savedDocs, setSavedDocs] = useState<Partial<Record<DocumentKind, UploadedDocument>>>({});
+  const [profileUsed, setProfileUsed] = useState(false);
+  const [userId, setUserId] = useState<string | null>(null);
+  const [draftReady, setDraftReady] = useState(false);
+  const [draftRestoredAt, setDraftRestoredAt] = useState<number | null>(null);
 
   const supabase = createClient();
+
+  // Offer the details and documents saved on "My profile": fill blanks only, never overwrite what was typed.
+  useEffect(() => {
+    let active = true;
+    void (async () => {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const userId = sessionData.session?.user.id;
+      if (!userId) return;
+      if (!active) return;
+      setUserId(userId);
+
+      // Restore an unfinished draft first (fills blanks only), then let the profile fill whatever is still empty.
+      const draft = loadDraft(userId);
+      if (draft) {
+        setValues((prev) => {
+          const next = { ...prev };
+          for (const [k, v] of Object.entries(draft.values)) if (!prev[k as keyof Values] && v) next[k as keyof Values] = v;
+          return next;
+        });
+        setDraftRestoredAt(draft.savedAt);
+      }
+      setDraftReady(true);
+
+      const { data } = await supabase.from('profiles').select('*').eq('user_id', userId).maybeSingle();
+      if (!active || !data) return;
+      const row = data as ProfileRow;
+      const saved = profileRowToValues(row);
+
+      const docs: Partial<Record<DocumentKind, UploadedDocument>> = {};
+      for (const d of row.documents ?? []) docs[d.kind] = { path: d.path, name: fileNameFromPath(d.path), size: d.size, fromProfile: true };
+
+      setValues((prev) => {
+        const next = { ...prev };
+        for (const field of PROFILE_FIELDS) if (!prev[field] && saved[field]) next[field] = saved[field];
+        return next;
+      });
+      if (saved.whatsappNumber && saved.whatsappNumber === saved.phone) setWhatsappSame(true);
+      setSavedDocs(docs);
+      setDocuments((prev) => ({ ...docs, ...prev }));
+      setProfileUsed(Object.keys(docs).length > 0 || PROFILE_FIELDS.some((f) => !!saved[f]));
+    })();
+    return () => {
+      active = false;
+    };
+  }, [supabase]);
+
+  // Autosave non-sensitive fields (see lib/draft.ts) shortly after the applicant stops typing.
+  useEffect(() => {
+    if (!draftReady || !userId || reference) return;
+    const t = window.setTimeout(() => saveDraft(userId, values), 600);
+    return () => window.clearTimeout(t);
+  }, [values, draftReady, userId, reference]);
+
+  // The signature and freshly uploaded files are not part of the draft: warn before they would be lost.
+  const hasUnsavedExtras = !reference && (!!signature || Object.values(documents).some((d) => d && !d.fromProfile));
+  useEffect(() => {
+    if (!hasUnsavedExtras) return;
+    const warn = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [hasUnsavedExtras]);
+
+  const discardDraft = () => {
+    clearDraft();
+    setValues((prev) => {
+      const next = { ...prev };
+      for (const f of DRAFT_FIELDS) next[f] = '';
+      return next;
+    });
+    setDraftRestoredAt(null);
+  };
 
   const clearError = useCallback((name: string) => {
     setErrors((prev) => {
@@ -100,6 +188,7 @@ export default function ApplicationForm({ defaultEmail, onSubmitted }: Applicati
 
     const payload = {
       ...values,
+      whatsappNumber: whatsappSame ? values.phone : values.whatsappNumber,
       consent,
       signatureDataUrl: signature ?? undefined,
       turnstileToken: turnstileToken ?? undefined,
@@ -149,6 +238,7 @@ export default function ApplicationForm({ defaultEmail, onSubmitted }: Applicati
       };
 
       if (res.ok && data.success && data.reference) {
+        clearDraft();
         setReference(data.reference);
         window.scrollTo({ top: 0 });
         onSubmitted?.();
@@ -199,6 +289,17 @@ export default function ApplicationForm({ defaultEmail, onSubmitted }: Applicati
 
   return (
     <form onSubmit={handleSubmit} noValidate className="space-y-6">
+      {draftRestoredAt && (
+        <div role="status" className="notice flex flex-wrap items-center justify-between gap-2">
+          <span>
+            <span className="font-bold text-brand-900">Draft restored.</span> We brought back what you typed on {formatDateTime(new Date(draftRestoredAt).toISOString())}. For your
+            privacy your Omang, income and signature are never saved: please re-enter them.
+          </span>
+          <button type="button" onClick={discardDraft} className="btn-secondary">
+            <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" /> Discard draft
+          </button>
+        </div>
+      )}
       {/* ---------------- Form 1: Loan application ---------------- */}
       <section className="paper p-5 sm:p-7" aria-labelledby="form-application">
         <DocHeader lines={FORM_TITLES.application.lines} />
@@ -211,7 +312,34 @@ export default function ApplicationForm({ defaultEmail, onSubmitted }: Applicati
             <Field {...f('fullName')} label="Full name" autoComplete="name" maxLength={120} wide />
             <Field {...f('dob')} label="Date of birth" type="date" autoComplete="bday" max={today} />
             <Field {...f('idNumber')} label="Omang / ID number" inputMode="numeric" maxLength={9} hint="9 digits" />
-            <Field {...f('phone')} label="Phone number" type="tel" autoComplete="tel" inputMode="tel" placeholder="71234567" />
+            <Field {...f('phone')} label="Phone number (Pay2Cell)" type="tel" autoComplete="tel" inputMode="tel" placeholder="71234567" />
+            <div>
+              {whatsappSame ? (
+                <>
+                  <span className="label-caps">WhatsApp number</span>
+                  <div className="input-box min-h-[38px] !bg-slate-100 text-slate-700">{values.phone || '—'}</div>
+                </>
+              ) : (
+                <Field {...f('whatsappNumber')} label="WhatsApp number" type="tel" autoComplete="tel" inputMode="tel" placeholder="71234567" required={false} />
+              )}
+              <label className="mt-2 flex items-start gap-2 text-xs text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={whatsappSame}
+                  onChange={(e) => {
+                    setWhatsappSame(e.target.checked);
+                    clearError('whatsappNumber');
+                  }}
+                  className="mt-0.5 h-4 w-4 accent-brand-700"
+                />
+                <span>My WhatsApp number is the same as my phone (Pay2Cell) number. Optional: we use it to message you on WhatsApp.</span>
+              </label>
+              {errors.whatsappNumber && whatsappSame && (
+                <p role="alert" className="mt-1 text-xs text-red-600">
+                  {errors.whatsappNumber}
+                </p>
+              )}
+            </div>
             <Field {...f('email')} label="Email address" type="email" autoComplete="email" />
             <Field {...f('address')} label="Residential address" autoComplete="street-address" wide />
           </div>
@@ -222,15 +350,30 @@ export default function ApplicationForm({ defaultEmail, onSubmitted }: Applicati
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <Field {...f('institution')} label="Institution / employer" autoComplete="organization" />
             <Field {...f('income')} label="Monthly allowance / income (BWP)" type="number" inputMode="decimal" min={0} />
-            <Field
-              {...f('loanAmount')}
-              label="Loan amount requested (BWP)"
-              type="number"
-              inputMode="decimal"
-              min={LOAN_MIN}
-              max={LOAN_MAX}
-              hint={`P${LOAN_MIN.toLocaleString('en-US')} – P${LOAN_MAX.toLocaleString('en-US')}`}
-            />
+            <div>
+              <Field
+                {...f('loanAmount')}
+                label="Loan amount requested (BWP)"
+                type="number"
+                inputMode="decimal"
+                min={LOAN_MIN}
+                max={LOAN_MAX}
+                hint={`P${LOAN_MIN.toLocaleString('en-US')} – P${LOAN_MAX.toLocaleString('en-US')}`}
+              />
+              <div className="mt-2 flex flex-wrap gap-2" role="group" aria-label="Quick amounts">
+                {QUICK_AMOUNTS.map((n) => (
+                  <button
+                    key={n}
+                    type="button"
+                    onClick={() => handleChange('loanAmount', String(n))}
+                    aria-pressed={Number(values.loanAmount) === n}
+                    className={`rounded-full border px-3 py-1 text-xs font-semibold transition ${Number(values.loanAmount) === n ? 'border-brand-700 bg-brand-700 text-white' : 'border-brand-200 bg-white text-brand-800 hover:bg-brand-50'}`}
+                  >
+                    P{n.toLocaleString('en-US')}
+                  </button>
+                ))}
+              </div>
+            </div>
             <Field {...f('loanPurpose')} label="Loan purpose" />
           </div>
         </fieldset>
@@ -281,6 +424,19 @@ export default function ApplicationForm({ defaultEmail, onSubmitted }: Applicati
         <p className="notice mb-5">
           <span className="font-bold text-brand-900">Notice:</span> Upload all five documents before signing. They are stored privately and are
           only seen by the Lender. Use clear photos or scans (JPG, PNG, WebP or PDF, up to 10 MB each).
+          {profileUsed ? (
+            <>
+              {' '}
+              Documents saved on your profile are already selected. Replace any of them to upload a different file for this application, or manage the saved
+              ones in <Link href="/profile" className="font-semibold text-brand-700 underline">My profile</Link>.
+            </>
+          ) : (
+            <>
+              {' '}
+              Tip: save your documents once in <Link href="/profile" className="font-semibold text-brand-700 underline">My profile</Link> and they will be
+              ready next time.
+            </>
+          )}
         </p>
         <div className="space-y-3">
           {DOCUMENT_SPECS.map((spec) => (
@@ -289,6 +445,8 @@ export default function ApplicationForm({ defaultEmail, onSubmitted }: Applicati
               spec={spec}
               value={documents[spec.kind]}
               error={errors[spec.kind]}
+              savedDoc={savedDocs[spec.kind]}
+              onView={(path) => void openPrivateFile(supabase, path)}
               onUpload={(file) => uploadDocument(supabase, spec.kind, file)}
               onChange={(doc) => {
                 setDocuments((prev) => ({ ...prev, [spec.kind]: doc }));

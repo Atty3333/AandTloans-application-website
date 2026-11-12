@@ -2,8 +2,9 @@
 
 import React, { useCallback, useEffect, useState } from 'react';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { FileText, History, Loader2, Pencil, X } from 'lucide-react';
+import { FileText, History, Loader2, MessageCircle, Pencil, X } from 'lucide-react';
 import Field from '@/components/Field';
+import ProofOfPaymentPanel from '@/components/ProofOfPaymentPanel';
 import {
   DETAIL_COLUMN_LABELS,
   FIELD_TO_COLUMN,
@@ -16,13 +17,16 @@ import {
 } from '@/lib/applications';
 import { ALL_STATUSES, DOCUMENTS_BUCKET, LOAN_MAX, LOAN_MIN, STORAGE_BUCKET, formatBwp, type LoanStatus } from '@/lib/config';
 import { DOCUMENT_LABELS, DOCUMENT_SPECS } from '@/lib/documents';
+import { parseProofs } from '@/lib/proofs';
+import { shortRef } from '@/lib/status';
+import { whatsappChatUrl } from '@/lib/whatsapp-link';
 import { adminEditSchema, fieldErrors } from '@/lib/validation';
 
 interface Props {
   row: LoanRow;
   supabase: SupabaseClient;
   onRowChange: (row: LoanRow) => void;
-  onStatusChange: (row: LoanRow, status: LoanStatus) => void;
+  onStatusChange: (row: LoanRow, status: LoanStatus) => void | Promise<unknown>;
   onMessage: (message: string | null) => void;
 }
 
@@ -32,6 +36,7 @@ const VIEW_ROWS: ReadonlyArray<readonly [DetailColumn, (v: string | number | nul
   ['id_number', (v) => String(v ?? '')],
   ['date_of_birth', (v) => String(v ?? '')],
   ['phone_number', (v) => String(v ?? '')],
+  ['whatsapp_number', (v) => String(v ?? '—')],
   ['email', (v) => String(v ?? '')],
   ['address', (v) => String(v ?? '')],
   ['institution', (v) => String(v ?? '')],
@@ -175,7 +180,8 @@ export default function AdminApplicationPanel({ row, supabase, onRowChange, onSt
               <Field {...f('fullName')} label="Full name" maxLength={120} wide />
               <Field {...f('dob')} label="Date of birth" type="date" />
               <Field {...f('idNumber')} label="Omang / ID number" inputMode="numeric" maxLength={9} />
-              <Field {...f('phone')} label="Phone number" type="tel" />
+              <Field {...f('phone')} label="Phone number (Pay2Cell)" type="tel" />
+              <Field {...f('whatsappNumber')} label="WhatsApp number" type="tel" required={false} />
               <Field {...f('email')} label="Email address" type="email" />
               <Field {...f('address')} label="Residential address" wide />
             </div>
@@ -228,7 +234,19 @@ export default function AdminApplicationPanel({ row, supabase, onRowChange, onSt
             {VIEW_ROWS.map(([column, fmt]) => (
               <div key={column}>
                 <dt className="label-caps">{DETAIL_COLUMN_LABELS[column]}</dt>
-                <dd className="break-words text-slate-900">{fmt(row[column])}</dd>
+                <dd className="break-words text-slate-900">
+                  {fmt(row[column])}
+                  {(column === 'whatsapp_number' || column === 'phone_number') && whatsappChatUrl(String(row[column] ?? '')) && (
+                    <a
+                      href={whatsappChatUrl(String(row[column] ?? ''), `Hello ${row.full_name}, this is A&T Student Loans about your application ${shortRef(row.id)}.`) ?? undefined}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="ml-2 inline-flex items-center gap-1 text-xs font-semibold text-brand-700 hover:text-brand-900"
+                    >
+                      <MessageCircle className="h-3.5 w-3.5" aria-hidden="true" /> Chat<span className="sr-only"> on WhatsApp</span>
+                    </a>
+                  )}
+                </dd>
               </div>
             ))}
             <div>
@@ -282,6 +300,16 @@ export default function AdminApplicationPanel({ row, supabase, onRowChange, onSt
           })}
         </ul>
       </section>
+
+      {/* ---------- Proof of payment (admins may add, replace or remove on any application) ---------- */}
+      <ProofOfPaymentPanel
+        applicationId={row.id}
+        proofs={parseProofs(row.proof_of_payments)}
+        canEdit
+        mode="admin"
+        supabase={supabase}
+        onChange={(proofs) => onRowChange({ ...row, proof_of_payments: proofs })}
+      />
 
       {/* ---------- Status ---------- */}
       <div className="flex flex-wrap items-center gap-3">

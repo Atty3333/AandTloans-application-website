@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import { ArrowLeft, Loader2 } from 'lucide-react';
 import ApplicationForm from '@/components/ApplicationForm';
 import { SiteHeader } from '@/components/BrandHeader';
+import ProfileLink from '@/components/ProfileLink';
 import { isAwaitingReply } from '@/lib/config';
 import { useSession } from '@/lib/use-session';
 
@@ -44,12 +45,13 @@ export default function ApplyPage() {
   }
 
   return (
-    <main className="min-h-screen px-4 py-8 sm:px-6 lg:px-8">
+    <main id="main" className="min-h-screen px-4 py-8 sm:px-6 lg:px-8">
       <div className="mx-auto max-w-3xl space-y-6">
         <SiteHeader subtitle={session.user.email ?? undefined} href="/dashboard">
           <Link href="/dashboard" className="btn-secondary">
             <ArrowLeft className="h-3.5 w-3.5" aria-hidden="true" /> My applications
           </Link>
+          <ProfileLink />
         </SiteHeader>
         <ApplicationForm defaultEmail={session.user.email ?? ''} />
       </div>

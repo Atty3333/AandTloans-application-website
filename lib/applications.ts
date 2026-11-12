@@ -6,6 +6,7 @@ export const FIELD_TO_COLUMN = {
   dob: 'date_of_birth',
   idNumber: 'id_number',
   phone: 'phone_number',
+  whatsappNumber: 'whatsapp_number',
   email: 'email',
   address: 'address',
   institution: 'institution',
@@ -30,7 +31,8 @@ export const DETAIL_COLUMN_LABELS: Record<DetailColumn, string> = {
   full_name: 'Full name',
   date_of_birth: 'Date of birth',
   id_number: 'Omang / ID number',
-  phone_number: 'Phone number',
+  phone_number: 'Phone number (Pay2Cell)',
+  whatsapp_number: 'WhatsApp number',
   email: 'Email address',
   address: 'Residential address',
   institution: 'Institution / employer',
@@ -97,6 +99,8 @@ export type LoanRow = DetailRow & {
   pdf_sha256: string;
   whatsapp_notified_at: string | null;
   documents: import('./documents').StoredDocument[] | null;
+  proof_of_payments: import('./proofs').ProofOfPayment[] | null;
+  user_id: string | null;
   last_edited_at: string | null;
 };
 

@@ -35,7 +35,7 @@ export default function ResetPasswordPage() {
   };
 
   return (
-    <main className="min-h-screen px-4 py-8">
+    <main id="main" className="min-h-screen px-4 py-8">
       <div className="mx-auto max-w-3xl space-y-8">
         <SiteHeader subtitle="Reset your password" />
         {session ? (

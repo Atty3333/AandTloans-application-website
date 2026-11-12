@@ -8,6 +8,8 @@ export interface UploadedDocument {
   path: string;
   name: string;
   size: number;
+  /** True when this is the document saved on the user's profile rather than a fresh upload. */
+  fromProfile?: boolean;
 }
 
 interface DocumentUploadProps {
@@ -18,11 +20,19 @@ interface DocumentUploadProps {
   onUpload: (file: File) => Promise<string>;
   onChange: (doc: UploadedDocument | undefined) => void;
   onBusyChange: (busy: boolean) => void;
+  /** Mark the document as optional (profile page): hides the red asterisk. */
+  optional?: boolean;
+  /** The document saved on the profile. When it is not the selected value, a "Use saved" button is offered. */
+  savedDoc?: UploadedDocument;
+  /** Show a View button for the current file. */
+  onView?: (path: string) => void;
+  /** Show a Remove button (profile page). */
+  onClear?: () => void;
 }
 
 const formatSize = (bytes: number) => (bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`);
 
-export default function DocumentUpload({ spec, value, error, onUpload, onChange, onBusyChange }: DocumentUploadProps) {
+export default function DocumentUpload({ spec, value, error, onUpload, onChange, onBusyChange, optional = false, savedDoc, onView, onClear }: DocumentUploadProps) {
   const input = useRef<HTMLInputElement | null>(null);
   const [busy, setBusy] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
@@ -60,7 +70,7 @@ export default function DocumentUpload({ spec, value, error, onUpload, onChange,
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="min-w-0 flex-1">
           <p className="label-caps">
-            {spec.label} <span aria-hidden="true" className="text-red-500">*</span>
+            {spec.label} {!optional && <span aria-hidden="true" className="text-red-500">*</span>}
           </p>
           <p className="mt-0.5 text-xs text-slate-500">{spec.hint}</p>
           {value && !busy && (
@@ -69,10 +79,26 @@ export default function DocumentUpload({ spec, value, error, onUpload, onChange,
               <FileText className="h-3.5 w-3.5 shrink-0 text-slate-400" aria-hidden="true" />
               <span className="truncate">{value.name}</span>
               <span className="shrink-0 text-slate-500">· {formatSize(value.size)}</span>
+              {value.fromProfile && <span className="shrink-0 rounded bg-brand-100 px-1.5 py-0.5 text-[10px] font-bold uppercase text-brand-800">From my profile</span>}
             </p>
           )}
         </div>
-        <div>
+        <div className="flex flex-wrap items-center gap-2">
+          {value && onView && (
+            <button type="button" onClick={() => onView(value.path)} disabled={busy} className="btn-secondary">
+              View
+            </button>
+          )}
+          {savedDoc && value?.path !== savedDoc.path && !busy && (
+            <button type="button" onClick={() => onChange({ ...savedDoc, fromProfile: true })} className="btn-secondary">
+              Use saved
+            </button>
+          )}
+          {value && onClear && !busy && (
+            <button type="button" onClick={onClear} className="btn-secondary">
+              Remove
+            </button>
+          )}
           <input
             ref={input}
             type="file"

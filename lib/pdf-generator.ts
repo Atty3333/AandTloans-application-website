@@ -1,3 +1,4 @@
+import { shortRef } from './status';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { PDFDocument, PDFFont, PDFImage, PDFPage, StandardFonts, rgb } from 'pdf-lib';
@@ -151,7 +152,7 @@ export async function buildLoanPdf(data: ApplicationInput, meta: PdfMeta): Promi
   const bold = await pdf.embedFont(StandardFonts.HelveticaBold);
   const logo = await loadLogo(pdf);
   const signature = await embedSignature(pdf, data.signatureDataUrl);
-  const ref = meta.applicationId.slice(0, 8).toUpperCase();
+  const ref = shortRef(meta.applicationId);
   const signedOn = formatShortDate(meta.submittedAt);
 
   pdf.setTitle(`Loan application ${ref}`);

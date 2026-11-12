@@ -99,6 +99,7 @@ const detailsShape = {
     .transform((v) => v.replace(/\s/g, ''))
     .refine(isValidOmang, 'Enter a valid 9-digit Omang number'),
   phone: phone('Phone number'),
+  whatsappNumber: optionalPhone('Enter a valid Botswana WhatsApp number (e.g. 71234567)'),
   email: z
     .string({ required_error: 'Email is required' })
     .trim()
@@ -173,6 +174,51 @@ export const adminEditSchema = z.object(detailsShape).superRefine(crossChecks);
 export type AdminEditInput = z.output<typeof adminEditSchema>;
 
 export type ApplicationInput = z.output<typeof applicationSchema>;
+
+// ---------------------------------------------------------------------------
+// Profile: the same field rules as an application, but every field may be left blank (filled in over time).
+// ---------------------------------------------------------------------------
+const blankOr = <T extends z.ZodTypeAny>(schema: T) =>
+  z.preprocess((v) => (typeof v === 'string' && v.trim() === '' ? undefined : v), schema.optional());
+
+const profileDetailsShape = {
+  fullName: blankOr(detailsShape.fullName),
+  dob: blankOr(detailsShape.dob),
+  idNumber: blankOr(detailsShape.idNumber),
+  phone: blankOr(detailsShape.phone),
+  whatsappNumber: detailsShape.whatsappNumber,
+  address: blankOr(detailsShape.address),
+  institution: blankOr(detailsShape.institution),
+  income: blankOr(detailsShape.income),
+  kinName: blankOr(detailsShape.kinName),
+  kinRelationship: blankOr(detailsShape.kinRelationship),
+  kinId: blankOr(detailsShape.kinId),
+  kinPhone: blankOr(detailsShape.kinPhone),
+  kinAltPhone: detailsShape.kinAltPhone,
+  kinAddress: blankOr(detailsShape.kinAddress),
+};
+
+const profileCrossChecks = (v: { kinId?: string; idNumber?: string }, ctx: z.RefinementCtx) => {
+  if (v.kinId && v.idNumber && v.kinId.toLowerCase() === v.idNumber.toLowerCase()) {
+    ctx.addIssue({ code: 'custom', path: ['kinId'], message: 'Next of kin cannot be the applicant' });
+  }
+};
+
+/** What an admin may edit on someone's profile: personal details only, never the saved loan documents or picture. */
+export const profileDetailsSchema = z.object(profileDetailsShape).superRefine(profileCrossChecks);
+export type ProfileDetailsInput = z.output<typeof profileDetailsSchema>;
+
+const nullablePath = z.string().regex(DOCUMENT_PATH_RE, 'Please upload this file again.').nullable().optional();
+
+/** What a user saves on their own profile. `null` clears a file, a missing key leaves it unchanged. */
+export const profileUpdateSchema = z
+  .object({
+    ...profileDetailsShape,
+    avatarPath: nullablePath,
+    documents: z.object(Object.fromEntries(DOCUMENT_KINDS.map((k) => [k, nullablePath])) as Record<(typeof DOCUMENT_KINDS)[number], typeof nullablePath>).optional(),
+  })
+  .superRefine(profileCrossChecks);
+export type ProfileUpdateInput = z.output<typeof profileUpdateSchema>;
 
 /** Flatten zod issues to { field: firstMessage }. */
 export function fieldErrors(error: z.ZodError): Record<string, string> {

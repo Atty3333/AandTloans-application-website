@@ -4,6 +4,7 @@ import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { Loader2 } from 'lucide-react';
 import AuthForm from '@/components/AuthForm';
+import HowItWorks from '@/components/HowItWorks';
 import { SiteHeader } from '@/components/BrandHeader';
 import { useSession } from '@/lib/use-session';
 
@@ -18,7 +19,7 @@ export default function HomePage() {
   const waiting = !ready || session;
 
   return (
-    <main className="min-h-screen px-4 py-8 sm:px-6 lg:px-8">
+    <main id="main" className="min-h-screen px-4 py-8 sm:px-6 lg:px-8">
       <div className="mx-auto max-w-3xl space-y-8">
         <SiteHeader subtitle="Fast & transparent financial assistance" />
 
@@ -33,6 +34,7 @@ export default function HomePage() {
               <p>Sign in or create an account to apply and to track your applications.</p>
             </section>
             <AuthForm />
+            <HowItWorks />
           </>
         )}
       </div>

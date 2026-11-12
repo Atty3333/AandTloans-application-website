@@ -69,3 +69,21 @@ export async function notifyAdminWhatsApp(n: AdminNotification): Promise<boolean
     return false;
   }
 }
+
+export type OutboundResult = { ok: true } | { ok: false; reason: 'not_integrated' | 'failed' };
+
+/** Flip to true once the WhatsApp integration below is implemented. */
+export const WHATSAPP_MESSAGING_INTEGRATED = false;
+
+/**
+ * Send ONE free-text message to an applicant. NOT INTEGRATED YET: nothing is sent and nothing is stored
+ * (there is deliberately no message history). When integrating, use an approved WhatsApp template
+ * (warnings are business-initiated, so free-form text is only deliverable inside the 24h window),
+ * keep `to` in international format without "+", and return { ok: false, reason: 'failed' } on errors.
+ */
+export async function sendWhatsAppText(to: string, body: string): Promise<OutboundResult> {
+  void to;
+  void body;
+  if (!WHATSAPP_MESSAGING_INTEGRATED) return { ok: false, reason: 'not_integrated' };
+  return { ok: false, reason: 'failed' };
+}
